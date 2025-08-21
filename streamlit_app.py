@@ -6,6 +6,12 @@ from datetime import datetime
 st.set_page_config(page_title="Auto Writer (MVP)", page_icon="📝", layout="centered")
 st.title("📝 Auto Writer — MVP")
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (AutoWriter/Streamlit)",
+    "Accept": "application/json",
+    "Content-Type": "application/json; charset=utf-8",
+}
+
 # --- Secrets 読み込み ---
 if "wp_configs" not in st.secrets:
     st.error("Secrets に [wp_configs] がありません。Settings → Secrets に登録してください。")
@@ -36,6 +42,7 @@ if st.button("🔍 /wp-json/wp/v2/users/me で認証チェック"):
     try:
         r = requests.get(base_url + "wp-json/wp/v2/users/me",
                          auth=HTTPBasicAuth(cfg["user"], cfg["password"]),
+                         headers=HEADERS,
                          timeout=20,
                          verify=True)
         if r.status_code == 200:
@@ -71,7 +78,7 @@ if st.button("✍️ 下書きを作成する（draft）", type="primary"):
         r = requests.post(base_url + "wp-json/wp/v2/posts",
                           json=payload,
                           auth=HTTPBasicAuth(cfg["user"], cfg["password"]),
-                          headers={"User-Agent": "streamlit-mvp"},
+                          headers=HEADERS,
                           timeout=30,
                           verify=True)
         if r.status_code in (200, 201):
