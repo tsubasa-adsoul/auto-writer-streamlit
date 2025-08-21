@@ -3,6 +3,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 from datetime import datetime
 
+
 st.set_page_config(page_title="Auto Writer (MVP)", page_icon="📝", layout="centered")
 st.title("📝 Auto Writer — MVP")
 
@@ -54,6 +55,38 @@ if st.button("🔍 /wp-json/wp/v2/users/me で認証チェック"):
         st.error(f"通信エラー: {e}")
 
 st.divider()
+
+st.subheader("🔐 接続テスト（認証付き /users/me）")
+
+cfg = {
+    "url": "https://sakibarai-kaitori.jp/",
+    "user": "sakibarai-kaitori",
+    "password": "m7m5 zZqj eG2u 8nOH mePo uU9s",
+}
+
+if st.button("認証GETを実行（/users/me）"):
+    for path in ["wp-json/wp/v2/users/me", "?rest_route=/wp/v2/users/me"]:
+        url = cfg["url"] + path
+        try:
+            r = requests.get(
+                url,
+                auth=HTTPBasicAuth(cfg["user"], cfg["password"]),
+                headers=HEADERS,
+                timeout=20,
+            )
+            st.write(f"GET {path} → {r.status_code}")
+            st.text(r.text[:300])
+            if r.status_code == 200:
+                st.success("認証OK！この設定で投稿できます。")
+                break
+            elif r.status_code == 401:
+                st.error("401 未ログイン：ユーザー名 or アプリケーションパスワードの取り違え。再確認（user_login名＋発行したアプリパス）")
+            elif r.status_code == 403:
+                st.error("403 Forbidden（Xserver青ページ）：送信元IP/経路ブロック。国外IP制限/アクセス制限をOFFに。")
+            else:
+                st.warning(f"{r.status_code}：レスポンス本文を確認。")
+        except Exception as e:
+            st.exception(e)
 
 # --- 下書き作成（LLMなし／手入力テスト） ---
 st.subheader("2) 下書き作成テスト（LLMなし）")
