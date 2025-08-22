@@ -493,7 +493,7 @@ with colL:
 
     cA, cB, cC, cD = st.columns([1, 1, 1, 1])
     with cA:
-        if st.button("この内容でプリセットを上書き保存"):
+        if st.button("この内容で上書き保存"):
             st.session_state.policy_store[st.session_state.active_policy] = st.session_state.policy_text
             save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
             st.success(f"『{st.session_state.active_policy}』を更新しました。")
