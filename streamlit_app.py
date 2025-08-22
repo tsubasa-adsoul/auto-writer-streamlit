@@ -802,19 +802,36 @@ with colR:
             dt_local = _dt.combine(sched_date, sched_time)
             date_gmt = dt_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
-        final_slug = (slug.strip() or generate_permalink(keyword))
+        # --- スラッグ判定ロジック ---
+        slug_mode = (cfg.get("slug_mode") or "romanize").lower()  # デフォルト romanize
+        typed_slug = slug.strip() if slug else ""
+        final_slug = None
 
+        if typed_slug:
+            final_slug = typed_slug
+        else:
+            if slug_mode == "romanize":
+                final_slug = generate_permalink(keyword)
+            elif slug_mode == "title":
+                final_slug = generate_permalink(title)
+            elif slug_mode == "auto":
+                final_slug = None  # ← WPに任せて ?p=数値
+            else:
+                final_slug = generate_permalink(keyword)
+
+        # --- payload 組み立て ---
         payload = {
             "title": title.strip(),
             "content": content_html,
             "status": status,
-            "slug": final_slug,
             "excerpt": excerpt.strip()
         }
         if date_gmt:
             payload["date_gmt"] = date_gmt
         if selected_cat_ids:
             payload["categories"] = selected_cat_ids
+        if final_slug:
+            payload["slug"] = final_slug
 
         r = wp_post(BASE, "wp/v2/posts", AUTH, HEADERS, json_payload=payload)
         if r is None or r.status_code not in (200, 201):
