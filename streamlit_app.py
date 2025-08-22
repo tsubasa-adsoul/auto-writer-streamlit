@@ -731,7 +731,7 @@ with colR:
             dt_local = _dt.combine(sched_date, sched_time)
             date_gmt = dt_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
-        final_slug = (slug.strip() or generate_permalink(title or keyword))
+        final_slug = (slug.strip() or generate_permalink(keyword))
 
         payload = {
             "title": title.strip(),
