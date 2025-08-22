@@ -595,7 +595,17 @@ with colR:
         st.info("このサイトで選べるカテゴリーが見つかりませんでした。Secretsの `wp_configs.<site_key>.categories` を確認してください。")
 
     # （既存）公開状態などはこの下に続く
-    status = st.selectbox("公開状態", ["draft", "future", "publish"], index=0)
+    status_options = {
+        "下書き": "draft",
+        "予約投稿": "future",
+        "公開": "publish"
+    }
+
+    # セレクトボックスは日本語表示
+    status_label = st.selectbox("公開状態", list(status_options.keys()), index=0)
+
+    # 実際に送信する値は英語
+    status = status_options[status_label]
     sched_date = st.date_input("予約日（future用）")
     sched_time = st.time_input("予約時刻（future用）", value=dt_time(9, 0))
 
