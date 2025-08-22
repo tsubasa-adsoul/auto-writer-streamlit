@@ -526,7 +526,7 @@ with colL:
             st.success(f"『{st.session_state.active_policy}』を更新しました。")
     with cB:
         st.download_button(
-            "この内容を .txt で保存（統合）",
+            "この内容をPCへで保存",
             data=st.session_state.get("policy_text", ""),
             file_name=f"{st.session_state.active_policy}.txt",
             mime="text/plain",
