@@ -648,12 +648,15 @@ with colM:
 with colR:
     st.header("3) タイトル/説明 → 投稿")
 
-    content_dir = (st.session_state.get("readers","") + "\n" +
-                   st.session_state.get("needs","") + "\n" +
-                   st.session_state.body_text)
-    content_source = st.session_state.get("edited_html") or st.session_state.get("assembled_html","")
+    content_dir = (
+        (st.session_state.get("readers", "") or "") + "\n" +
+        (st.session_state.get("needs", "") or "") + "\n" +
+        st.session_state.policy_text
+    )
+    # 本文ソース（生成済み or 編集済み）を参照
+    content_source = st.session_state.get("edited_html") or st.session_state.get("assembled_html", "")
 
-    colT1, colT2 = st.columns([1,1])
+    colT1, colT2 = st.columns([1, 1])
     with colT1:
         if st.button("SEOタイトル自動生成"):
             if not content_source.strip():
@@ -662,94 +665,109 @@ with colR:
                 st.session_state["title"] = generate_seo_title(keyword, content_dir)
     with colT2:
         if st.button("メタディスクリプション自動生成"):
-            t = st.session_state.get("title","") or f"{keyword}に関するポイント"
+            t = st.session_state.get("title", "") or f"{keyword}に関するポイント"
             if not content_source.strip():
                 st.warning("先に本文（編集後）を用意してください。")
             else:
                 st.session_state["excerpt"] = generate_seo_description(keyword, content_dir, t)
 
-    title = st.text_input("タイトル", value=st.session_state.get("title",""))
+    title = st.text_input("タイトル", value=st.session_state.get("title", ""))
     slug  = st.text_input("スラッグ（空なら自動）", value="")
-    excerpt = st.text_area("ディスクリプション（抜粋）", value=st.session_state.get("excerpt",""), height=80)
+    excerpt = st.text_area("ディスクリプション（抜粋）", value=st.session_state.get("excerpt", ""), height=80)
 
-    # ▼ カテゴリーUI
-    def fetch_categories(base_url: str, auth: HTTPBasicAuth) -> List[Tuple[str,int]]:
+    # ▼ここから：カテゴリーUI（cfg.categories → wp_categories → REST の順で取得）
+    def fetch_categories(base_url: str, auth: HTTPBasicAuth) -> List[tuple]:
+        """RESTでカテゴリ一覧を取得して (label, id) のリストを返す。失敗なら空。"""
         try:
             r = wp_get(base_url, "wp/v2/categories?per_page=100&_fields=id,name", auth, HEADERS)
             if r is not None and r.status_code == 200:
                 data = r.json()
-                pairs = [(c.get("name","(no name)"), int(c.get("id"))) for c in data if c.get("id") is not None]
+                pairs = [(c.get("name", "(no name)"), int(c.get("id"))) for c in data if c.get("id") is not None]
                 return sorted(pairs, key=lambda x: x[0])
         except Exception:
             pass
         return []
 
-    cfg_cats_map: Dict[str,int] = dict(cfg.get("categories", {}))
-    cats: List[Tuple[str,int]] = []
+    # 1) Secrets: [wp_configs.<site_key>].categories を最優先
+    cfg_cats_map: Dict[str, int] = dict(cfg.get("categories", {}))
+    cats: List[tuple] = []
     if cfg_cats_map:
         cats = sorted([(name, int(cid)) for name, cid in cfg_cats_map.items()], key=lambda x: x[0])
     else:
-        sc_map: Dict[str,int] = st.secrets.get("wp_categories", {}).get(site_key, {})
+        # 2) Secrets: [wp_categories.<site_key>] フォールバック
+        sc_map: Dict[str, int] = st.secrets.get("wp_categories", {}).get(site_key, {})
         if sc_map:
             cats = sorted([(name, int(cid)) for name, cid in sc_map.items()], key=lambda x: x[0])
         else:
+            # 3) 最後の手段：RESTで取得（WAF等で403なら空のまま）
             cats = fetch_categories(BASE, AUTH)
 
     cat_labels = [name for (name, _cid) in cats]
-    sel_labels: List[str] = st.multiselect("カテゴリー（複数可）", cat_labels, default=[])
+    default_labels: List[str] = []  # 既定選択したいラベルがあれば入れる（例: ["先払い買取コラム"]）
+    sel_labels: List[str] = st.multiselect("カテゴリー（複数可）", cat_labels, default=default_labels)
     selected_cat_ids: List[int] = [cid for (name, cid) in cats if name in sel_labels]
     if not cats:
-        st.info("このサイトで選べるカテゴリーが見つかりませんでした。Secretsの `wp_configs.<site>.categories` を確認してください。")
+        st.info("このサイトのカテゴリーが見つかりませんでした。Secretsの `wp_configs.<site_key>.categories` を確認してください。")
 
-    # 公開状態（日本語ラベル → API値）
+    # ▼公開状態：日本語表示 → WP値に変換
     status_options = {"下書き": "draft", "予約投稿": "future", "公開": "publish"}
     status_label = st.selectbox("公開状態", list(status_options.keys()), index=0)
     status = status_options[status_label]
-    sched_date = st.date_input("予約日（future用）")
-    sched_time = st.time_input("予約時刻（future用）", value=dt_time(9,0))
 
-    # 投稿
+    # 予約日時（future用）
+    sched_date = st.date_input("予約日（future用）")
+    sched_time = st.time_input("予約時刻（future用）", value=dt_time(9, 0))
+
     if st.button("📝 WPに下書き/投稿する", type="primary", use_container_width=True):
+        # —— 必須チェック
         if not keyword.strip():
             st.error("キーワードは必須です。"); st.stop()
         if not title.strip():
             st.error("タイトルは必須です。"); st.stop()
 
-        content_html = (st.session_state.get("edited_html") if st.session_state.get("use_edited")
-                        else st.session_state.get("assembled_html","")).strip()
+        # —— ここで content_html を“このボタン内”で定義（※これがNameError対策の肝）
+        content_html = (
+            st.session_state.get("edited_html") if st.session_state.get("use_edited")
+            else st.session_state.get("assembled_html", "")
+        ).strip()
         if not content_html:
-            st.error("本文が未生成です。『①〜③生成→記事を一括生成』の順で作成してください。"); st.stop()
+            st.error("本文が未生成です。『リード/本文/まとめ』を生成し、必要なら編集してください。"); st.stop()
 
+        # クレンジング
         content_html = simplify_html(content_html)
 
+        # 予約日時（UTC）組み立て
         date_gmt = None
         if status == "future":
-            from datetime import datetime as _dt
-            dt_local = _dt.combine(sched_date, sched_time)
+            from datetime import datetime as dt
+            dt_local = dt.combine(sched_date, sched_time)
             date_gmt = dt_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
+        # スラッグ
         final_slug = (slug.strip() or generate_permalink(title or keyword))
 
-        payload = {
+        # —— payload は“このボタン内”で組み立て（content_htmlと同スコープ）
+        payload: Dict[str, Any] = {
             "title": title.strip(),
             "content": content_html,
             "status": status,
             "slug": final_slug,
-            "excerpt": excerpt.strip()
+            "excerpt": excerpt.strip(),
         }
         if date_gmt:
             payload["date_gmt"] = date_gmt
         if selected_cat_ids:
-            payload["categories"] = selected_cat_ids
+            payload["categories"] = selected_cat_ids  # ← カテゴリを反映
 
+        # 投稿
         r = wp_post(BASE, "wp/v2/posts", AUTH, HEADERS, json_payload=payload)
-        if r is None or r.status_code not in (200,201):
-            st.error(f"投稿失敗: {r.status_code if r else 'N/A'}")
-            if r is not None:
-                st.code(r.text[:1000])
+        if r.status_code not in (200, 201):
+            st.error(f"投稿失敗: {r.status_code}")
+            st.code(r.text[:1000])
             st.stop()
 
         data = r.json()
         st.success(f"投稿成功！ID={data.get('id')} / status={data.get('status')}")
-        st.write("URL:", data.get("link",""))
-        st.json({k: data.get(k) for k in ["id","slug","status","date","link"]})
+        st.write("URL:", data.get("link", ""))
+        st.json({k: data.get(k) for k in ["id", "slug", "status", "date", "link"]})
+
