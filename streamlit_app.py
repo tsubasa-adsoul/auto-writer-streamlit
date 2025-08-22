@@ -556,37 +556,39 @@ with colR:
 
     title = st.text_input("タイトル", value=ss.get("title", ""))
     slug = st.text_input("スラッグ（空なら自動）", value="")
+    # （既存）ディスクリプション入力
     excerpt = st.text_area("ディスクリプション（抜粋）", value=ss.get("excerpt", ""), height=80)
 
     # ▼ここから追加：サイトのカテゴリを取得→選択UI
-def fetch_categories(base_url: str, auth: HTTPBasicAuth) -> list[tuple[str, int]]:
-    """RESTでカテゴリ一覧を取得して (label, id) リストを返す。失敗なら空。"""
-    try:
-        r = wp_get(base_url, "wp/v2/categories?per_page=100", auth, HEADERS)
-        if r is not None and r.status_code == 200:
-            data = r.json()
-            pairs = [(c.get("name", "(no name)"), int(c.get("id"))) for c in data if c.get("id") is not None]
-            return sorted(pairs, key=lambda x: x[0])
-    except Exception:
-        pass
-    return []
+    def fetch_categories(base_url: str, auth: HTTPBasicAuth) -> list[tuple[str, int]]:
+        """RESTでカテゴリ一覧を取得して (label, id) リストを返す。失敗なら空。"""
+        try:
+            r = wp_get(base_url, "wp/v2/categories?per_page=100", auth, HEADERS)
+            if r is not None and r.status_code == 200:
+                data = r.json()
+                pairs = [(c.get("name", "(no name)"), int(c.get("id"))) for c in data if c.get("id") is not None]
+                return sorted(pairs, key=lambda x: x[0])
+        except Exception:
+            pass
+        return []
 
-# RESTで取れない/403の環境向けフォールバック（Secrets に ID マップを置く運用）
-# Secrets 例：
-# [wp_categories.sakibarai-kaitori]
-# "先払い買取コラム" = 2
-# "先払い買取業者"   = 3
-site_cat_map: dict[str, int] = st.secrets.get("wp_categories", {}).get(site_key, {})  # site_key はサイドバーのサイト選択キー
-cats: list[tuple[str, int]] = fetch_categories(BASE, AUTH)
-if not cats and site_cat_map:
-    cats = sorted([(name, int(cid)) for name, cid in site_cat_map.items()], key=lambda x: x[0])
+    # RESTで取れない/403の環境向けフォールバック（Secrets に ID マップを置く運用）
+    # Secrets 例：
+    # [wp_categories.sakibarai-kaitori]
+    # "先払い買取コラム" = 2
+    # "先払い買取業者"   = 3
+    site_cat_map: dict[str, int] = st.secrets.get("wp_categories", {}).get(site_key, {})
+    cats: list[tuple[str, int]] = fetch_categories(BASE, AUTH)
+    if not cats and site_cat_map:
+        cats = sorted([(name, int(cid)) for name, cid in site_cat_map.items()], key=lambda x: x[0])
 
-cat_labels = [name for (name, _cid) in cats]
-default_labels: list[str] = []  # 既定選択したいラベルがあればここに入れる（例：["先払い買取コラム"]）
-sel_labels: list[str] = st.multiselect("カテゴリー（複数可）", cat_labels, default=default_labels)
-selected_cat_ids: list[int] = [cid for (name, cid) in cats if name in sel_labels]
+    cat_labels = [name for (name, _cid) in cats]
+    default_labels: list[str] = []  # 既定選択したいラベルがあればここに入れる
+    sel_labels: list[str] = st.multiselect("カテゴリー（複数可）", cat_labels, default=default_labels)
+    selected_cat_ids: list[int] = [cid for (name, cid) in cats if name in sel_labels]
+    # ▲ここまで追加
 
-    
+    # （既存）公開状態などはこの下に続く
     status = st.selectbox("公開状態", ["draft", "future", "publish"], index=0)
     sched_date = st.date_input("予約日（future用）")
     sched_time = st.time_input("予約時刻（future用）", value=dt_time(9, 0))
@@ -623,6 +625,10 @@ selected_cat_ids: list[int] = [cid for (name, cid) in cats if name in sel_labels
         }
         if date_gmt:
             payload["date_gmt"] = date_gmt
+
+            # ▼ここを追加：カテゴリ（ID配列）
+        if selected_cat_ids:
+            payload["categories"] = selected_cat_ids
 
         r = wp_post(BASE, "wp/v2/posts", AUTH, HEADERS, json_payload=payload)
         if r.status_code not in (200, 201):
