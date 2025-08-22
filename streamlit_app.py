@@ -1,18 +1,16 @@
 # streamlit_app.py
 # ------------------------------------------------------------
-# WP Auto Writer (Final)
-# - ④本文ポリシーは .txt から読み込み（AIで④は生成しない）
+# WP Auto Writer (Final One-Shot)
+# - ④本文ポリシーは .txt 読み込み（AIで④は生成しない）
 # - ①読者像 / ②ニーズ / ③構成 をAI生成
-# - リード / 本文 / まとめ は .txtポリシーと禁止事項を反映してAI生成
+# - 記事（リード→本文→まとめ）は 1 回のリクエストで一括生成
 # - 禁止事項は手入力のみ（アップロードなし）
 # - ポリシープリセット：.txt読み込み→選択→編集→上書き/削除→ローカルキャッシュでF5後も維持
 # - ?rest_route= 優先でWP下書き/投稿（403回避）
-# - アイキャッチ：未搭載（手作成）
+# - アイキャッチ：未搭載（手作成運用）
 # ------------------------------------------------------------
 import re
 import json
-import os
-from io import BytesIO
 from pathlib import Path
 from datetime import datetime, timezone, time as dt_time
 from typing import Dict, Any, List
@@ -25,7 +23,7 @@ import streamlit as st
 # 基本設定
 # ==============================
 st.set_page_config(page_title="WP Auto Writer", page_icon="📝", layout="wide")
-st.title("📝 WP Auto Writer — 最終版（④は .txt 読み込み）")
+st.title("📝 WP Auto Writer — 一括生成（④は .txt 読み込み）")
 
 # ------------------------------
 # Secrets 読み込み
@@ -71,9 +69,9 @@ HEADERS = {
 }
 
 # ------------------------------
-# 生成ユーティリティ
+# 生成ユーティリティ / バリデータ
 # ------------------------------
-ALLOWED_TAGS = ['h2','h3','p','strong','em','ul','ol','li','table','tr','th','td']  # <br>は使わない
+ALLOWED_TAGS = ['h2','h3','p','strong','em','ul','ol','li','table','tr','th','td']  # <br>禁止
 MAX_H2 = 8
 
 def simplify_html(html: str) -> str:
@@ -91,7 +89,7 @@ def limit_h2_count(html: str, max_count: int = MAX_H2) -> str:
     return "".join(h2s[:max_count]) + "\n"
 
 def generate_permalink(keyword_or_title: str) -> str:
-    import unicodedata
+    import unicodedata, re as _re
     s = keyword_or_title.lower()
     subs = {
         '先払い買取':'sakibarai-kaitori','先払い':'sakibarai','買取':'kaitori','口コミ':'kuchikomi',
@@ -101,15 +99,12 @@ def generate_permalink(keyword_or_title: str) -> str:
     }
     for jp,en in subs.items(): s = s.replace(jp,en)
     s = unicodedata.normalize('NFKD', s)
-    s = re.sub(r'[^a-z0-9]+', '-', s).strip('-')
-    s = re.sub(r'-{2,}', '-', s)
+    s = _re.sub(r'[^a-z0-9]+', '-', s).strip('-')
+    s = _re.sub(r'-{2,}', '-', s)
     if len(s) > 50:
         parts = s.split('-'); s = '-'.join(parts[:5])
     return s or f"post-{int(datetime.now().timestamp())}"
 
-# ------------------------------
-# 簡易バリデータ（要件チェック）
-# ------------------------------
 def validate_article(html: str) -> List[str]:
     warns: List[str] = []
     if re.search(r'<h4|<script|<style', html, flags=re.IGNORECASE):
@@ -117,7 +112,6 @@ def validate_article(html: str) -> List[str]:
     if re.search(r'<br\s*/?>', html, flags=re.IGNORECASE):
         warns.append("<br> タグは使用禁止です。すべて <p> に置き換えてください。")
 
-    # H2ごとに表 or 箇条書きの有無を確認
     h2_iter = list(re.finditer(r'(<h2>.*?</h2>)', html, flags=re.DOTALL | re.IGNORECASE))
     for i, m in enumerate(h2_iter):
         start = m.end()
@@ -126,7 +120,6 @@ def validate_article(html: str) -> List[str]:
         if not re.search(r'<(ul|ol|table)\b', section, flags=re.IGNORECASE):
             warns.append("H2セクションに表（table）または箇条書き（ul/ol）が不足しています。")
 
-    # h3直下の<p>数（目安4〜5）
     h3_positions = list(re.finditer(r'(<h3>.*?</h3>)', html, flags=re.DOTALL | re.IGNORECASE))
     for i, m in enumerate(h3_positions):
         start = m.end()
@@ -137,14 +130,12 @@ def validate_article(html: str) -> List[str]:
         if p_count < 3 or p_count > 6:
             warns.append("各<h3>直下は4〜5文（<p>）が目安です。分量を調整してください。")
 
-    # 一文55文字以内（概算）
     for p in re.findall(r'<p>(.*?)</p>', html, flags=re.DOTALL | re.IGNORECASE):
         text = re.sub(r'<.*?>', '', p)
         if len(text.strip()) > 55:
             warns.append("一文が55文字を超えています。短く区切ってください。")
             break
 
-    # 全体6000文字以内
     plain = re.sub(r'<.*?>', '', html)
     if len(plain.strip()) > 6000:
         warns.append("記事全体が6000文字を超えています。要約・整理してください。")
@@ -165,13 +156,13 @@ def call_gemini(prompt: str, temperature: float = 0.2) -> str:
     return j["candidates"][0]["content"]["parts"][0]["text"]
 
 # ------------------------------
-# プロンプト群（④は無し）
+# プロンプト群（④なし / 一括生成）
 # ------------------------------
 def prompt_outline_123(keyword: str, extra: str, banned: List[str], max_h2: int) -> str:
     banned_block = "\n".join([f"・{b}" for b in banned]) if banned else "（なし）"
     return f"""
 # 役割
-あなたは日本語SEOに強いWeb編集者。キーワードから「①読者像」「②ニーズ」「③構成(HTML)」を作る。④は不要。
+あなたは日本語SEOに強いWeb編集者。キーワードから「①読者像」「②ニーズ」「③構成(HTML)」を作る。
 
 # 入力
 - キーワード: {keyword}
@@ -196,60 +187,42 @@ def prompt_outline_123(keyword: str, extra: str, banned: List[str], max_h2: int)
 <h3>...</h3>
 """.strip()
 
-def prompt_lead(keyword: str, content_direction: str, structure_html: str) -> str:
-    return f"""
-# 役割: SEOライター
-# 指示: 「{keyword}」のリード文を作成。必ず<h2>はじめに</h2>→<p>…</p>複数で書く。
-# ルール:
-- 読者の悩みに共感→本文で得られる具体メリット2つ以上→興味喚起→行動喚起の一文
-- 一文につき<p>1つ。装飾タグは最小限。<br>禁止
-
-# 記事の方向性:
-{content_direction}
-
-# 構成案:
-{structure_html}
-
-# 出力:
-""".strip()
-
-def prompt_body(keyword: str, structure_html: str, policy_bullets: str, banned: List[str]) -> str:
+def prompt_full_article(keyword: str, policy_text: str, structure_html: str,
+                        readers_txt: str, needs_txt: str, banned: List[str]) -> str:
     banned_block = "\n".join([f"・{b}" for b in banned]) if banned else "（なし）"
     return f"""
-# 役割: SEOライター
-# 任務: 構成（<h2>,<h3>）に沿って本文HTMLのみを書く（<h1>禁止）
+# 命令書:
+あなたはSEOに特化したプロライターです。
+以下の構成案と本文ポリシーに従い、「{keyword}」の記事を
+**リード文 → 本文 → まとめ**まで一気通貫でHTML出力してください。
 
-# 厳守ルール
-- H2直下導入で「この記事では〜」等の定型句を使わない
-- 許可タグ: {', '.join(ALLOWED_TAGS)}（それ以外は出力しない）
-- 事実は曖昧に書かない。不明は「不明/公式未記載」と明記
-- 禁止事項（絶対NG）:
+# 出力形式（厳守）:
+- 先頭に必ず <h2>はじめに</h2> を置き、その直後にリード文を <p> で複数出力すること
+- 各 <h2> の冒頭には導入段落（3行程度）を <p> で置くこと
+- 各 <h3> 直下には 4〜5 文（≈400字）の解説を <p> で出力すること
+- 最後に必ず <h2>まとめ</h2> を置き、一文1<p> で要点をまとめ、必要に応じて箇条書きを入れること
+- 一文は55文字以内。1文=1<p>。<br> は絶対に使用禁止
+- 許可タグは {', '.join(ALLOWED_TAGS)} のみ（これ以外は出力しない）
+- <h1>, <h4>, <script>, <style> の出力は禁止
+
+# 本文ポリシー（厳守）:
+{policy_text}
+
+# 禁止事項（絶対に含めない）:
 {banned_block}
 
-# 文体/方針（箇条書き）
-{policy_bullets}
+# 記事の方向性（参考）:
+[読者像]
+{readers_txt}
 
-# 入力
-- キーワード: {keyword}
-- 構成（HTML）:
+[ニーズ]
+{needs_txt}
+
+# 構成案（この<h2><h3>構成を厳密に守る）:
 {structure_html}
 
-# 出力（本文HTMLのみ）:
-""".strip()
-
-def prompt_summary(keyword: str, content_dir: str, article_html: str) -> str:
-    return f"""
-# 役割: SEOライター
-# 指示: 「{keyword}」の記事のまとめをHTMLで作成
-# 形式: 先頭に<h2>まとめ</h2>。一文1<p>。箇条書き2-3可。<br>禁止。広告/PR文言禁止。
-
-# 記事の方向性:
-{content_dir}
-
-# 参考（本文）:
-{article_html}
-
 # 出力:
+（HTMLのみを出力）
 """.strip()
 
 def generate_seo_title(keyword: str, content_dir: str) -> str:
@@ -388,7 +361,6 @@ with colL:
                 txt = f.read().decode("utf-8", errors="ignore").strip()
                 name = f.name.rsplit(".", 1)[0]  # 例: sato-policy
                 st.session_state.policy_store[name] = txt
-                # 読み込んだものをアクティブに
                 st.session_state.active_policy = name
                 st.session_state.policy_text = txt
             except Exception as e:
@@ -426,7 +398,6 @@ with colL:
             use_container_width=True
         )
     with cC:
-        # デフォルト以外は削除可能
         if st.session_state.active_policy != DEFAULT_POLICY_NAME:
             if st.button("このプリセットを削除"):
                 del st.session_state.policy_store[st.session_state.active_policy]
@@ -437,9 +408,9 @@ with colL:
 
 # ------ 中：生成 & プレビュー ------
 with colM:
-    st.header("2) 生成 & プレビュー（④は .txt から使用）")
+    st.header("2) 生成 & プレビュー（記事を一括生成）")
 
-    # ①〜③ 生成（④はAIに依頼しない）
+    # ①〜③ 生成
     max_h2 = st.number_input("H2の最大数", min_value=3, max_value=12, value=MAX_H2, step=1)
     if st.button("①〜③（読者像/ニーズ/構成）を生成"):
         if not keyword.strip():
@@ -457,55 +428,47 @@ with colM:
         structure_html = limit_h2_count(structure_html, max_h2)
         st.session_state["structure_html"] = structure_html
 
-    # 手直しエディタ
+    # 手直し
     readers_txt   = st.text_area("① 読者像（編集可）", value=st.session_state.get("readers",""), height=110)
     needs_txt     = st.text_area("② ニーズ（編集可）",   value=st.session_state.get("needs",""),   height=110)
     structure_html= st.text_area("③ 構成（HTML / 編集可）", value=st.session_state.get("structure_html",""), height=180)
 
-    colM1, colM2, colM3 = st.columns([1,1,1])
-    with colM1:
-        gen_lead = st.button("リード生成")
-    with colM2:
-        gen_body = st.button("本文生成")
-    with colM3:
-        gen_summary = st.button("まとめ生成")
-
-    if gen_lead:
-        content_dir = readers_txt + "\n" + needs_txt + "\n" + st.session_state.policy_text
-        lead_html = call_gemini(prompt_lead(keyword, content_dir, structure_html))
-        st.session_state["lead_html"] = simplify_html(lead_html)
-
-    if gen_body:
-        policy_bullets = st.session_state.policy_text
-        body_html = call_gemini(prompt_body(keyword, structure_html, policy_bullets, merged_banned))
-        body_html = simplify_html(body_html)
-        body_html = limit_h2_count(body_html, max_h2)
-        st.session_state["body_html"] = body_html
-
-    if gen_summary:
-        content_dir = readers_txt + "\n" + needs_txt + "\n" + st.session_state.policy_text
-        article_for_summary = (st.session_state.get("lead_html","") + "\n" + st.session_state.get("body_html",""))
-        summary_html = call_gemini(prompt_summary(keyword, content_dir, article_for_summary))
-        st.session_state["summary_html"] = simplify_html(summary_html)
+    # ★ 記事を一括生成（リード→本文→まとめ／1回のリクエスト）
+    if st.button("🪄 記事を一括生成（リード→本文→まとめ）", type="primary", use_container_width=True):
+        if not keyword.strip():
+            st.error("キーワードは必須です。"); st.stop()
+        if not structure_html.strip():
+            st.error("③構成（HTML）が必要です。①〜③を生成し、必要なら編集してください。"); st.stop()
+        full = call_gemini(prompt_full_article(
+            keyword=keyword,
+            policy_text=st.session_state.policy_text,
+            structure_html=structure_html,
+            readers_txt=readers_txt,
+            needs_txt=needs_txt,
+            banned=merged_banned
+        ))
+        full = simplify_html(full)
+        full = limit_h2_count(full, max_h2)
+        st.session_state["assembled_html"] = full
+        # 参考として内部的に分割ポストしたい場合に使えるが、ここでは一括のまま扱う
+        st.session_state["lead_html"] = ""
+        st.session_state["body_html"] = ""
+        st.session_state["summary_html"] = ""
 
     # プレビュー & 編集
-    assembled = ""
-    for key in ["lead_html","body_html","summary_html"]:
-        if st.session_state.get(key):
-            assembled += st.session_state[key].strip() + "\n\n"
+    assembled = st.session_state.get("assembled_html","")
     if assembled:
-        st.markdown("#### 👀 プレビュー")
+        st.markdown("#### 👀 プレビュー（一括生成結果）")
         st.write(assembled, unsafe_allow_html=True)
         issues = validate_article(assembled)
         if issues:
             st.warning("検査結果:\n- " + "\n- ".join(issues))
-    st.session_state["assembled_html"] = assembled.strip()
 
     with st.expander("✏️ プレビューを編集（この内容を下書きに送付）", expanded=False):
         st.caption("※ ここでの修正が最終本文になります。HTMLで編集可。")
         st.session_state["edited_html"] = st.text_area(
             "編集用HTML",
-            value=st.session_state.get("edited_html", st.session_state.get("assembled_html","")),
+            value=st.session_state.get("edited_html", assembled),
             height=420
         )
         st.session_state["use_edited"] = st.checkbox("編集したHTMLを採用する", value=True)
@@ -551,7 +514,7 @@ with colR:
         content_html = (st.session_state.get("edited_html") if st.session_state.get("use_edited")
                         else st.session_state.get("assembled_html","")).strip()
         if not content_html:
-            st.error("本文が未生成です。『リード/本文/まとめ』を生成し、必要なら編集してください。"); st.stop()
+            st.error("本文が未生成です。『①〜③生成→記事を一括生成』の順で作成してください。"); st.stop()
 
         content_html = simplify_html(content_html)
 
