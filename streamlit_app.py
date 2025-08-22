@@ -27,7 +27,7 @@ import streamlit as st
 # 基本設定
 # ==============================
 st.set_page_config(page_title="WP Auto Writer", page_icon="📝", layout="wide")
-st.title("📝 WP Auto Writer — 一括生成（リード/本文/まとめ＝.txt管理・互換対応）")
+st.title("📝 WP Auto Writer — 一括生成")
 
 # ------------------------------
 # Secrets 読み込み
@@ -458,7 +458,7 @@ with colL:
     merged_banned = [l.strip() for l in banned_text.splitlines() if l.strip()]
 
     st.divider()
-    st.subheader("④ ポリシー（.txt 読み込み→選択→編集→保存）※1ファイル=1区分（統合）")
+    st.subheader("④ 文章ポリシー")
 
     # .txt 読み込み（複数可 / 丸ごと保存）
     pol_files = st.file_uploader("policy*.txt（複数可）を読み込む", type=["txt"], accept_multiple_files=True)
@@ -484,7 +484,7 @@ with colL:
         save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
 
     # 編集（1テキスト）
-    st.markdown("### ✏️ ポリシー本文（統合 / そのまま編集可）")
+    st.markdown("### ✏️ ポリシー本文（そのまま編集可）")
     st.session_state.policy_text = st.text_area(
         "ポリシー本文（[リード文] / [本文指示] / [まとめ文] を含めて1ファイル）",
         value=st.session_state.get("policy_text", ""),
@@ -531,7 +531,7 @@ with colL:
 
 # ------ 中：生成 & プレビュー ------
 with colM:
-    st.header("2) 生成 & プレビュー（記事を一括生成）")
+    st.header("2) 生成 & プレビュー")
 
     # H2最小/最大
     max_h2 = st.number_input("H2の最大数", min_value=3, max_value=12, value=MAX_H2, step=1)
