@@ -242,66 +242,49 @@ def generate_seo_description(keyword: str, content_dir: str, title: str) -> str:
 
 def generate_permalink(keyword_or_title: str) -> str:
 # ---- パーマリンク生成（キーワード→ローマ字→SEOスラッグ） -------------------
-import re
-from datetime import datetime
+        # ---- パーマリンク生成（キーワード→ローマ字→SEOスラッグ） -------------------
+        import re
+        from datetime import datetime
 
-# 使えるなら unidecode / pykakasi を使う。無ければ簡易フォールバック
-try:
-    from unidecode import unidecode
-    def _jp_to_romaji(s: str) -> str:
-        return unidecode(s)
-except Exception:
-    try:
-        from pykakasi import kakasi
-        _kk = kakasi()
-        _kk.setMode("J", "a")  # Japanese → ascii
-        _conv = _kk.getConverter()
-        def _jp_to_romaji(s: str) -> str:
-            return _conv.do(s)
-    except Exception:
-        def _jp_to_romaji(s: str) -> str:
-            # フォールバック：記号類を空白へ
-            return s
+        try:
+            from unidecode import unidecode
+            def _jp_to_romaji(s: str) -> str:
+                return unidecode(s)
+        except Exception:
+            try:
+                from pykakasi import kakasi
+                _kk = kakasi()
+                _kk.setMode("J", "a")  # Japanese → ascii
+                _conv = _kk.getConverter()
+                def _jp_to_romaji(s: str) -> str:
+                    return _conv.do(s)
+            except Exception:
+                def _jp_to_romaji(s: str) -> str:
+                    return s
 
-def generate_permalink(keyword_or_title: str) -> str:
-    """
-    キーワード（優先）をローマ字化→英数字・ハイフンのみ→短縮してスラッグ生成。
-    何も残らなければ post-<timestamp> を返す。
-    """
-    s = (keyword_or_title or "").strip()
-    if not s:
-        return f"post-{int(datetime.now().timestamp())}"
+        def generate_permalink(keyword_or_title: str) -> str:
+            s = (keyword_or_title or "").strip()
+            if not s:
+                return f"post-{int(datetime.now().timestamp())}"
 
-    # ローマ字化（できる範囲で）
-    s = _jp_to_romaji(s).lower()
+            s = _jp_to_romaji(s).lower()
+            s = s.replace("&", " and ").replace("+", " plus ")
+            s = re.sub(r"[^a-z0-9\s-]", "", s)
+            s = re.sub(r"\s+", "-", s)
+            s = re.sub(r"-{2,}", "-", s).strip("-")
 
-    # よくある置換（and/plus 等）
-    s = s.replace("&", " and ").replace("+", " plus ")
+            if len(s) > 50:
+                parts = s.split("-")
+                out = []
+                for p in parts:
+                    if not p:
+                        continue
+                    if len("-".join(out + [p])) > 50:
+                        break
+                    out.append(p)
+                s = "-".join(out) or s[:50]
 
-    # 英数字・空白・ハイフン以外を削除
-    s = re.sub(r"[^a-z0-9\s-]", "", s)
-
-    # 空白をハイフンへ
-    s = re.sub(r"\s+", "-", s)
-
-    # 連続ハイフン圧縮 & 前後トリム
-    s = re.sub(r"-{2,}", "-", s).strip("-")
-
-    # 先頭語を中心に 50 文字以内（長すぎ防止）
-    if len(s) > 50:
-        parts = s.split("-")
-        out = []
-        for p in parts:
-            if not p:
-                continue
-            if len("-".join(out + [p])) > 50:
-                break
-            out.append(p)
-        s = "-".join(out) or s[:50]
-
-    # 何も残らなければ timestamp
-    return s or f"post-{int(datetime.now().timestamp())}"
-
+            return s or f"post-{int(datetime.now().timestamp())}"
 
 # ------------------------------
 # ポリシー（統合）管理
