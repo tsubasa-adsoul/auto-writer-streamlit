@@ -606,8 +606,8 @@ with colR:
 
     # 実際に送信する値は英語
     status = status_options[status_label]
-    sched_date = st.date_input("予約日（future用）")
-    sched_time = st.time_input("予約時刻（future用）", value=dt_time(9, 0))
+    sched_date = st.date_input("予約日（予約投稿用）")
+    sched_time = st.time_input("予約時刻（予約投稿用）", value=dt_time(9, 0))
 
     if st.button("📝 WPに下書き/投稿する", type="primary", use_container_width=True):
         if not keyword.strip():
