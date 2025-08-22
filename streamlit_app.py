@@ -29,7 +29,7 @@ import streamlit as st
 # 基本設定
 # ==============================
 st.set_page_config(page_title="WP Auto Writer", page_icon="📝", layout="wide")
-st.title("📝 WP Auto Writer — 一括生成（統合ポリシー + 共起語対応）")
+st.title("📝 WP Auto Writer")
 
 # ------------------------------
 # Secrets 読み込み
