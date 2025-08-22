@@ -669,7 +669,7 @@ with colR:
                 st.session_state["excerpt"] = generate_seo_description(keyword, content_dir, t)
 
     title = st.text_input("タイトル", value=st.session_state.get("title", ""))
-    slug = st.text_input("スラッグ（空なら自動）", value="")
+    slug = st.text_input("スラッグ（空ならキーワードから自動）", value="")
     excerpt = st.text_area("ディスクリプション（抜粋）", value=st.session_state.get("excerpt", ""), height=80)
 
     # ▼ カテゴリーUI
