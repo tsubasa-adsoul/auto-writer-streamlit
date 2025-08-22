@@ -557,14 +557,6 @@ with colL:
             save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
             st.warning("プリセットを削除しました。")
 
-    with cD:
-        if st.button("🔁 プリセットを初期状態に戻す"):
-            st.session_state.policy_store = {DEFAULT_PRESET_NAME: DEFAULT_POLICY_TXT}
-            st.session_state.active_policy = DEFAULT_PRESET_NAME
-            st.session_state.policy_text = DEFAULT_POLICY_TXT
-            save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
-            st.success("初期状態にリセットしました。")
-
 # ------ 中：生成 & プレビュー ------
 with colM:
     st.header("2) 生成 & プレビュー")
