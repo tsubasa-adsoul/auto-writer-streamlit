@@ -1,16 +1,16 @@
 # streamlit_app.py
 # ------------------------------------------------------------
 # WP Auto Writer (Policy via .txt, Local-Only, No DB)
-# - キーワード必須 → ①〜④（読者像/ニーズ/構成/本文方針）をAI生成
-# - ④本文ポリシーは .txt を読み込み（複数可）→ 選択・編集・書き出し
-# - 禁止事項は画面入力（1行=1項目）＋（任意）.txt 取込み
-# - ?rest_route= 優先でWPへ draft/post（403回避）
+# - キーワード必須 → ①〜④（読者像/ニーズ/構成/本文ポリシー）AI生成
+# - ④本文ポリシーは .txt を読み込んで選択・編集・書き出し（JSONは使わない）
+# - 禁止事項は画面入力＋.txt取り込みを合流（1行=1項目）
+# - ?rest_route= 優先で WP に draft/post（403回避）
 # - アイキャッチ：未搭載（手作成運用）
 # ------------------------------------------------------------
-import json
 import re
+import json
 from datetime import datetime, timezone, time as dt_time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -69,22 +69,25 @@ HEADERS = {
 # ------------------------------
 # 生成ユーティリティ
 # ------------------------------
-ALLOWED_TAGS = ['h2','h3','p','br','strong','em','ul','ol','li','table','tr','th','td']
+# ※ <br> は絶対禁止要件のため ALLOWED_TAGS に含めない
+ALLOWED_TAGS = ['h2','h3','p','strong','em','ul','ol','li','table','tr','th','td']
 MAX_H2 = 8
 
 def simplify_html(html: str) -> str:
-    # 許可タグ以外を除去（属性は許容 / 必要に応じて強化可）
+    """許可タグ以外を除去（属性は許容 / 必要に応じて強化可）"""
     tags = re.findall(r'</?(\w+)[^>]*>', html)
     for tag in set(tags):
         if tag.lower() not in ALLOWED_TAGS:
             html = re.sub(rf'</?{tag}[^>]*>', '', html, flags=re.IGNORECASE)
+    # 絶対禁止の <br> を消す
+    html = re.sub(r'<br\s*/?>', '', html, flags=re.IGNORECASE)
     return html
 
 def limit_h2_count(html: str, max_count: int = MAX_H2) -> str:
+    """H2の過剰生成を抑制（先頭 max 件のみ）"""
     h2s = re.findall(r'(<h2>.*?</h2>)', html, flags=re.DOTALL | re.IGNORECASE)
     if len(h2s) <= max_count:
         return html
-    # 先頭 max_count 件のみ採用（本文が長く暴走するのを防ぐ）
     kept = "".join(h2s[:max_count]) + "\n"
     return kept
 
@@ -106,6 +109,54 @@ def generate_permalink(keyword_or_title: str) -> str:
         parts = s.split('-')
         s = '-'.join(parts[:5])
     return s or f"post-{int(datetime.now().timestamp())}"
+
+# ------------------------------
+# 簡易バリデータ（要件チェック＆警告）
+# ------------------------------
+def validate_article(html: str) -> List[str]:
+    warnings: List[str] = []
+    # 1) 絶対禁止タグ
+    if re.search(r'<h4|<script|<style', html, flags=re.IGNORECASE):
+        warnings.append("禁止タグ（h4/script/style）が含まれています。")
+    if re.search(r'<br\s*/?>', html, flags=re.IGNORECASE):
+        warnings.append("<br> タグは使用禁止です。すべて <p> に置き換えてください。")
+
+    # 2) 各H2セクションに表/箇条書きがあるか
+    h2_iter = list(re.finditer(r'(<h2>.*?</h2>)', html, flags=re.DOTALL | re.IGNORECASE))
+    for i, m in enumerate(h2_iter):
+        start = m.end()
+        end = h2_iter[i+1].start() if i+1 < len(h2_iter) else len(html)
+        section = html[start:end]
+        if not re.search(r'<(ul|ol|table)\b', section, flags=re.IGNORECASE):
+            warnings.append("H2セクションに表（table）または箇条書き（ul/ol）が不足しています。")
+
+    # 3) h3直下の分量（概ね4〜5文 ≒ <p>の数）
+    #    ※厳密判定ではなく目安
+    #    h3 -> 次の h2/h3 の直前までを対象
+    h3_positions = list(re.finditer(r'(<h3>.*?</h3>)', html, flags=re.DOTALL | re.IGNORECASE))
+    for i, m in enumerate(h3_positions):
+        start = m.end()
+        # 次の見出し（h2 or h3）まで
+        next_head = re.search(r'(<h2>|<h3>)', html[start:], flags=re.IGNORECASE)
+        end = start + next_head.start() if next_head else len(html)
+        block = html[start:end]
+        p_count = len(re.findall(r'<p>.*?</p>', block, flags=re.DOTALL | re.IGNORECASE))
+        if p_count < 3 or p_count > 6:
+            warnings.append("各<h3>直下は4〜5文（<p>）が目安です。分量を調整してください。")
+
+    # 4) 一文55文字以内（<p>で概算チェック）
+    for p in re.findall(r'<p>(.*?)</p>', html, flags=re.DOTALL | re.IGNORECASE):
+        text = re.sub(r'<.*?>', '', p)  # タグ除去して文字数
+        if len(text.strip()) > 55:
+            warnings.append("一文が55文字を超えています。短く区切ってください。")
+            break
+
+    # 5) 全体の文字数（6000文字以内）
+    plain = re.sub(r'<.*?>', '', html)
+    if len(plain.strip()) > 6000:
+        warnings.append("記事全体が6000文字を超えています。要約・整理してください。")
+
+    return warnings
 
 # ------------------------------
 # Gemini 呼び出し
@@ -163,7 +214,7 @@ def prompt_lead(keyword: str, content_direction: str, structure_html: str) -> st
 # 指示: 「{keyword}」のリード文を作成。必ず<h2>はじめに</h2>→<p>…</p>複数で書く。
 # ルール:
 - 読者の悩みに共感→本文で得られる具体メリット2つ以上→興味喚起→行動喚起の一文
-- 一文につき<p>1つ。装飾タグは最小限
+- 一文につき<p>1つ。装飾タグは最小限。<br>禁止
 
 # 記事の方向性:
 {content_direction}
@@ -251,13 +302,40 @@ if st.sidebar.button("🔐 認証 /users/me"):
 # ==============================
 # セッション（ポリシー/禁止事項）
 # ==============================
+DEFAULT_POLICY_TXT = (
+    "・プロンプト③で出力された <h2> と <h3> 構成を維持し、それぞれの直下に <p> タグで本文を記述\n"
+    "・各 <h2> の冒頭に「ここでは、〜について解説します」形式の導入段落を3行程度 <p> タグで挿入する\n"
+    "・各 <h3> の直下には4～5文程度（400文字程度）の詳細な解説を記述\n"
+    "・<h4>、<script>、<style> などは禁止\n"
+    "・一文は55文字以内に収めること\n"
+    "・一文ごとに独立した<p>タグで記述すること（<br>タグは絶対に使用禁止）\n"
+    "・一つの文章が終わるごとに改行すること\n"
+    "・必要に応じて<ul>、<ol>、<li>、<table>、<tr>、<th>、<td>タグを使用して分かりやすく情報を整理すること\n"
+    "・各H2セクションには必ず1つ以上の表（table）または箇条書き（ul/ol）を含めること\n"
+    "・手続きの比較、メリット・デメリット、専門家比較、費用比較などは必ず表形式で整理すること\n"
+    "・メリット・デメリット比較や専門家比較は必ず以下の形式で表を作成すること：\n"
+    "　<table><tr><th>項目</th><th>選択肢1</th><th>選択肢2</th></tr><tr><th>メリット</th><td>内容</td><td>内容</td></tr></table>\n"
+    "・表のHTMLタグ（table, tr, th, td）を正確に使用すること\n"
+    "・表形式が適している情報は必ず表で整理すること\n"
+    "・メリット・デメリットの比較は必ず表形式で作成すること\n"
+    "・【メリット】【デメリット】のような明確な区分を使用すること\n"
+    "・PREP法もしくはSDS法で書くこと\n"
+    "・横文字を使用しないこと\n"
+    "・冗長表現を使用しないこと\n"
+    "・「です」「ましょう」「ます」「ください」など、様々な語尾のバリエーションを使用してください\n"
+    "・記事全体は6000文字に収めること\n"
+    "・具体例や注意点、実際の手続き方法を豊富に含め、実践的で有益な情報を提供すること\n"
+    "・専門的でありながら分かりやすい解説を心がけること\n"
+    "・情報量を増やすため、各セクションで詳細な説明と複数の具体例を含めること"
+)
+
 if "policy_store" not in st.session_state:
     # {name: text}
-    st.session_state.policy_store = {"標準": "- 事実は曖昧にしない\n- <h1>は出力しない\n- 箇条書きを適宜活用"}
+    st.session_state.policy_store = {"デフォルト": DEFAULT_POLICY_TXT}
 if "active_policy" not in st.session_state:
-    st.session_state.active_policy = "標準"
+    st.session_state.active_policy = "デフォルト"
 if "policy_text" not in st.session_state:
-    st.session_state.policy_text = st.session_state.policy_store["標準"]
+    st.session_state.policy_text = st.session_state.policy_store["デフォルト"]
 if "banned_master" not in st.session_state:
     st.session_state.banned_master: List[str] = []
 
@@ -278,9 +356,9 @@ with colL:
     banned_text = st.text_area("禁止事項（1行=1項目 / 厳守）", height=120)
     manual_banned = [l.strip() for l in banned_text.splitlines() if l.strip()]
 
-    # 禁止事項 .txt 取込み（任意）
+    # 禁止事項 .txt 取込み（任意・複数）
     st.caption("（任意）禁止事項.txt を読み込む → 行単位で結合されます。")
-    banned_files = st.file_uploader("banned.txt（複数可）", type=["txt"], accept_multiple_files=True)
+    banned_files = st.file_uploader("banned*.txt（複数可）", type=["txt"], accept_multiple_files=True)
     file_banned: List[str] = []
     if banned_files:
         for f in banned_files:
@@ -293,7 +371,7 @@ with colL:
     merged_banned = st.session_state.banned_master + file_banned + manual_banned
 
     st.divider()
-    st.subheader("④ 本文ポリシー（.txt でインポート/編集/保存）")
+    st.subheader("④ 本文ポリシー（.txt でインポート/選択/編集/書き出し）")
 
     # .txt 取込み（複数）
     pol_files = st.file_uploader("policy*.txt（複数可）を読み込む", type=["txt"], accept_multiple_files=True)
@@ -314,21 +392,15 @@ with colL:
         st.session_state.policy_text = st.session_state.policy_store[sel]
 
     # 編集
-    policy_txt = st.text_area("本文ポリシー（編集可 / ここが④）", value=st.session_state.policy_text, height=140)
+    policy_txt = st.text_area("本文ポリシー（編集可 / ここが④）", value=st.session_state.policy_text, height=220)
     st.session_state.policy_text = policy_txt
 
-    cA, cB, cC = st.columns([1,1,1])
+    cA, cB = st.columns([1,1])
     with cA:
         if st.button("この内容でプリセットを上書き保存"):
             st.session_state.policy_store[st.session_state.active_policy] = st.session_state.policy_text
             st.success(f"『{st.session_state.active_policy}』を更新しました。")
     with cB:
-        if st.button("新規プリセットとして保存"):
-            new_name = f"custom-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-            st.session_state.policy_store[new_name] = st.session_state.policy_text
-            st.session_state.active_policy = new_name
-            st.success(f"新規プリセット『{new_name}』を作成しました。")
-    with cC:
         st.download_button(
             "現在の本文ポリシーを policy.txt に書き出し",
             data=st.session_state.policy_text,
@@ -336,8 +408,6 @@ with colL:
             mime="text/plain",
             use_container_width=True
         )
-
-    st.caption("※ サイトごとに .txt を用意して読み込めば、個性（文体ルール）を使い回せます。")
 
 # ------ 中：生成 & プレビュー ------
 with colM:
@@ -349,7 +419,7 @@ with colM:
         if not keyword.strip():
             st.error("キーワードは必須です。"); st.stop()
         outline_raw = call_gemini(prompt_outline(keyword, extra_points, merged_banned, max_h2))
-        # ざっくり抽出
+
         readers = re.search(r'①[^\n]*\n(.+?)\n\n②', outline_raw, flags=re.DOTALL)
         needs   = re.search(r'②[^\n]*\n(.+?)\n\n③', outline_raw, flags=re.DOTALL)
         struct  = re.search(r'③[^\n]*\n(.+?)\n\n④', outline_raw, flags=re.DOTALL)
@@ -361,13 +431,13 @@ with colM:
         structure_html = simplify_html(structure_html)
         structure_html = limit_h2_count(structure_html, max_h2)
         st.session_state["structure_html"] = structure_html
-        # ④は「生成された方針」より .txt を優先する運用にするため、UI上は参考表示のみに留める
+        # ④は参考表示（本運用は .txt を優先）
         st.session_state["policy_generated"] = (policy.group(1).strip() if policy else "")
 
     # 手直しエディタ
     readers_txt   = st.text_area("① 読者像（編集可）", value=st.session_state.get("readers",""), height=110)
     needs_txt     = st.text_area("② ニーズ（編集可）",   value=st.session_state.get("needs",""),   height=110)
-    structure_html= st.text_area("③ 構成（HTML / 編集可）", value=st.session_state.get("structure_html",""), height=160)
+    structure_html= st.text_area("③ 構成（HTML / 編集可）", value=st.session_state.get("structure_html",""), height=180)
     st.expander("参考：④ 本文ポリシー（AIが出した案）", expanded=False).write(st.session_state.get("policy_generated","") or "（未生成）")
 
     colM1, colM2, colM3 = st.columns([1,1,1])
@@ -386,7 +456,8 @@ with colM:
     if gen_body:
         policy_bullets = st.session_state.policy_text or "- 事実は曖昧にしない\n- <h1>禁止\n- 箇条書きを適宜活用"
         body_html = call_gemini(prompt_body(keyword, structure_html, policy_bullets, merged_banned))
-        body_html = simplify_html(body_html); body_html = limit_h2_count(body_html, max_h2)
+        body_html = simplify_html(body_html)
+        body_html = limit_h2_count(body_html, max_h2)
         st.session_state["body_html"] = body_html
 
     if gen_summary:
@@ -403,6 +474,12 @@ with colM:
     if assembled:
         st.markdown("#### 👀 プレビュー")
         st.write(assembled, unsafe_allow_html=True)
+
+        # 検査
+        issues = validate_article(assembled)
+        if issues:
+            st.warning("検査結果:\n- " + "\n- ".join(issues))
+
     st.session_state["assembled_html"] = assembled.strip()
 
     with st.expander("✏️ プレビューを編集（この内容を下書きに送付）", expanded=False):
