@@ -16,6 +16,36 @@ import requests
 from requests.auth import HTTPBasicAuth
 import streamlit as st
 
+import os
+from pathlib import Path
+
+# ==============================
+# txt読み込み
+# ==============================
+
+CACHE_PATH = Path("./policies_cache.json")
+
+def load_policies_from_cache():
+    try:
+        if CACHE_PATH.exists():
+            with open(CACHE_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        st.warning(f"ポリシーキャッシュ読込エラー: {e}")
+    return None
+
+def save_policies_to_cache(policy_store: dict, active_policy: str):
+    try:
+        with open(CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(
+                {"policy_store": policy_store, "active_policy": active_policy},
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+    except Exception as e:
+        st.warning(f"ポリシーキャッシュ保存エラー: {e}")
+
 # ==============================
 # 基本設定
 # ==============================
@@ -339,6 +369,17 @@ if "policy_text" not in st.session_state:
 if "banned_master" not in st.session_state:
     st.session_state.banned_master: List[str] = []
 
+# 既存の初期化直後に追加：キャッシュに何かあれば上書き
+cached = load_policies_from_cache()
+if cached:
+    if "policy_store" in cached and isinstance(cached["policy_store"], dict):
+        st.session_state.policy_store = cached["policy_store"]
+    if "active_policy" in cached and cached["active_policy"] in st.session_state.policy_store:
+        st.session_state.active_policy = cached["active_policy"]
+        st.session_state.policy_text = st.session_state.policy_store[st.session_state.active_policy]
+
+
+
 # ==============================
 # 3カラム：入力 / 生成&プレビュー / 投稿
 # ==============================
@@ -374,18 +415,28 @@ with colL:
         for f in pol_files:
             try:
                 txt = f.read().decode("utf-8", errors="ignore").strip()
-                name = f.name.rsplit(".", 1)[0]
+                name = f.name.rsplit(".", 1)[0]  # 例: sato-policy
                 st.session_state.policy_store[name] = txt
+            # 直近追加したものをアクティブにする場合（任意）
+                st.session_state.active_policy = name
+                st.session_state.policy_text = txt
             except Exception as e:
                 st.warning(f"{f.name}: 読み込み失敗 ({e})")
+        # ★自動保存
+        save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
 
-    # 選択
+# 選択
     names = sorted(st.session_state.policy_store.keys())
-    sel = st.selectbox("適用するポリシー", names, index=names.index(st.session_state.active_policy) if st.session_state.active_policy in names else 0)
-    if sel != st.session_state.active_policy:
-        st.session_state.active_policy = sel
-        st.session_state.policy_text = st.session_state.policy_store[sel]
-
+    sel = st.selectbox(
+        "適用するポリシー",
+        names,
+        index=names.index(st.session_state.active_policy) if st.session_state.active_policy in names else 0
+)
+if sel != st.session_state.active_policy:
+    st.session_state.active_policy = sel
+    st.session_state.policy_text = st.session_state.policy_store[sel]
+    # ★自動保存
+    save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
     # 編集
     policy_txt = st.text_area("本文ポリシー（編集可 / ここが④）", value=st.session_state.policy_text, height=220)
     st.session_state.policy_text = policy_txt
@@ -395,6 +446,7 @@ with colL:
         if st.button("この内容でプリセットを上書き保存"):
             st.session_state.policy_store[st.session_state.active_policy] = st.session_state.policy_text
             st.success(f"『{st.session_state.active_policy}』を更新しました。")
+            save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
     with cB:
         st.download_button(
             "現在の本文ポリシーを policy.txt に書き出し",
