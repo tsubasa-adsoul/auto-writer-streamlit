@@ -357,18 +357,13 @@ with colL:
     manual_banned = [l.strip() for l in banned_text.splitlines() if l.strip()]
 
     # 禁止事項 .txt 取込み（任意・複数）
-    st.caption("（任意）禁止事項.txt を読み込む → 行単位で結合されます。")
-    banned_files = st.file_uploader("banned*.txt（複数可）", type=["txt"], accept_multiple_files=True)
-    file_banned: List[str] = []
-    if banned_files:
-        for f in banned_files:
-            try:
-                txt = f.read().decode("utf-8", errors="ignore")
-                file_banned.extend([l.strip() for l in txt.splitlines() if l.strip()])
-            except Exception as e:
-                st.warning(f"{f.name}: 読み込み失敗 ({e})")
+    st.markdown("### 🚫 禁止事項（任意）")
+    banned_text = st.text_area("禁止ワード・禁止表現（1行ごと）", value=st.session_state.get("banned_text",""), height=120)
+    st.session_state["banned_text"] = banned_text
 
-    merged_banned = st.session_state.banned_master + file_banned + manual_banned
+# 入力欄だけで合流
+    merged_banned = [l.strip() for l in banned_text.splitlines() if l.strip()]
+
 
     st.divider()
     st.subheader("④ 本文ポリシー（.txt でインポート/選択/編集/書き出し）")
