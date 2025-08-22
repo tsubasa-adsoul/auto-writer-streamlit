@@ -241,24 +241,67 @@ def generate_seo_description(keyword: str, content_dir: str, title: str) -> str:
     return re.sub(r'[\n\r]', '', desc)[:120]
 
 def generate_permalink(keyword_or_title: str) -> str:
-    import unicodedata
-    import re as _re
-    s = keyword_or_title.lower()
-    subs = {
-        '先払い買取': 'sakibarai-kaitori', '先払い': 'sakibarai', '買取': 'kaitori', '口コミ': 'kuchikomi',
-        '評判': 'hyoban', '体験談': 'taiken', 'レビュー': 'review', '比較': 'hikaku', '査定': 'satei',
-        'おすすめ': 'osusume', 'ランキング': 'ranking', '評価': 'hyoka', '申込': 'moushikomi', '方法': 'houhou',
-        '流れ': 'nagare', '手順': 'tejun'
-    }
-    for jp, en in subs.items():
-        s = s.replace(jp, en)
-    s = unicodedata.normalize('NFKD', s)
-    s = _re.sub(r'[^a-z0-9]+', '-', s).strip('-')
-    s = _re.sub(r'-{2,}', '-', s)
+# ---- パーマリンク生成（キーワード→ローマ字→SEOスラッグ） -------------------
+import re
+from datetime import datetime
+
+# 使えるなら unidecode / pykakasi を使う。無ければ簡易フォールバック
+try:
+    from unidecode import unidecode
+    def _jp_to_romaji(s: str) -> str:
+        return unidecode(s)
+except Exception:
+    try:
+        from pykakasi import kakasi
+        _kk = kakasi()
+        _kk.setMode("J", "a")  # Japanese → ascii
+        _conv = _kk.getConverter()
+        def _jp_to_romaji(s: str) -> str:
+            return _conv.do(s)
+    except Exception:
+        def _jp_to_romaji(s: str) -> str:
+            # フォールバック：記号類を空白へ
+            return s
+
+def generate_permalink(keyword_or_title: str) -> str:
+    """
+    キーワード（優先）をローマ字化→英数字・ハイフンのみ→短縮してスラッグ生成。
+    何も残らなければ post-<timestamp> を返す。
+    """
+    s = (keyword_or_title or "").strip()
+    if not s:
+        return f"post-{int(datetime.now().timestamp())}"
+
+    # ローマ字化（できる範囲で）
+    s = _jp_to_romaji(s).lower()
+
+    # よくある置換（and/plus 等）
+    s = s.replace("&", " and ").replace("+", " plus ")
+
+    # 英数字・空白・ハイフン以外を削除
+    s = re.sub(r"[^a-z0-9\s-]", "", s)
+
+    # 空白をハイフンへ
+    s = re.sub(r"\s+", "-", s)
+
+    # 連続ハイフン圧縮 & 前後トリム
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+
+    # 先頭語を中心に 50 文字以内（長すぎ防止）
     if len(s) > 50:
-        parts = s.split('-')
-        s = '-'.join(parts[:5])
+        parts = s.split("-")
+        out = []
+        for p in parts:
+            if not p:
+                continue
+            if len("-".join(out + [p])) > 50:
+                break
+            out.append(p)
+        s = "-".join(out) or s[:50]
+
+    # 何も残らなければ timestamp
     return s or f"post-{int(datetime.now().timestamp())}"
+
 
 # ------------------------------
 # ポリシー（統合）管理
