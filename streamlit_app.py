@@ -416,42 +416,45 @@ with colL:
             try:
                 txt = f.read().decode("utf-8", errors="ignore").strip()
                 name = f.name.rsplit(".", 1)[0]  # 例: sato-policy
+            # ▼ 取り込み＆アクティブ化
                 st.session_state.policy_store[name] = txt
-            # 直近追加したものをアクティブにする場合（任意）
                 st.session_state.active_policy = name
                 st.session_state.policy_text = txt
+                st.session_state["__show_policy_editor__"] = True  # ← エディタを表示させるフラグ
             except Exception as e:
                 st.warning(f"{f.name}: 読み込み失敗 ({e})")
-        # ★自動保存
+    # （任意）ローカルキャッシュも更新しておく
         save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
 
 # 選択
     names = sorted(st.session_state.policy_store.keys())
-    sel = st.selectbox(
-        "適用するポリシー",
-        names,
-        index=names.index(st.session_state.active_policy) if st.session_state.active_policy in names else 0
-)
-if sel != st.session_state.active_policy:
-    st.session_state.active_policy = sel
-    st.session_state.policy_text = st.session_state.policy_store[sel]
-    # ★自動保存
-    save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
-    # 編集
-    policy_txt = st.text_area("本文ポリシー（編集可 / ここが④）", value=st.session_state.policy_text, height=220)
+    sel = st.selectbox("適用するポリシー", names,
+                       index=names.index(st.session_state.active_policy) if st.session_state.active_policy in names else 0)
+    if sel != st.session_state.active_policy:
+        st.session_state.active_policy = sel
+        st.session_state.policy_text = st.session_state.policy_store[sel]
+        save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
+
+# ▼ エディタ本体：常に出す（アップロード直後は中身が自動で入る）
+    st.markdown("### ✏️ 本文ポリシー（編集可）")
+    policy_txt = st.text_area(
+        "ここをそのまま使う or 必要なら書き換え",
+        value=st.session_state.get("policy_text", DEFAULT_POLICY_TXT),
+        height=220
+    )
     st.session_state.policy_text = policy_txt
 
     cA, cB = st.columns([1,1])
     with cA:
         if st.button("この内容でプリセットを上書き保存"):
             st.session_state.policy_store[st.session_state.active_policy] = st.session_state.policy_text
-            st.success(f"『{st.session_state.active_policy}』を更新しました。")
             save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
+            st.success(f"『{st.session_state.active_policy}』を更新しました。")
     with cB:
         st.download_button(
-            "現在の本文ポリシーを policy.txt に書き出し",
+            "この内容を .txt で保存",
             data=st.session_state.policy_text,
-            file_name="policy.txt",
+            file_name=f"{st.session_state.active_policy}.txt",
             mime="text/plain",
             use_container_width=True
         )
