@@ -538,7 +538,15 @@ with colL:
             len(st.session_state.policy_store) > 1 and
             st.session_state.active_policy in st.session_state.policy_store
         )
-        if can_delete and st.button("このプリセットを削除"):
+
+        delete_clicked = st.button(
+            "このプリセットを削除",
+            disabled=not can_delete,
+            help=("default は削除できません / 最低1件は必要です"
+                  if not can_delete else "このプリセットを削除します")
+        )
+
+        if delete_clicked:
             del st.session_state.policy_store[st.session_state.active_policy]
             fallback = DEFAULT_PRESET_NAME if DEFAULT_PRESET_NAME in st.session_state.policy_store else None
             if not fallback:
@@ -548,6 +556,7 @@ with colL:
             st.session_state.policy_text = st.session_state.policy_store[fallback]
             save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
             st.warning("プリセットを削除しました。")
+
     with cD:
         if st.button("🔁 プリセットを初期状態に戻す"):
             st.session_state.policy_store = {DEFAULT_PRESET_NAME: DEFAULT_POLICY_TXT}
