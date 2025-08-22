@@ -511,7 +511,7 @@ with colL:
         save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
 
     # 編集（1テキスト）
-    st.markdown("### ✏️ ポリシー本文（そのまま編集可）")
+    st.markdown("### ✏️ 本文ルール")
     st.session_state.policy_text = st.text_area(
         "ポリシー本文（[リード文] / [本文指示] / [まとめ文] を含めて1ファイル）",
         value=st.session_state.get("policy_text", ""),
