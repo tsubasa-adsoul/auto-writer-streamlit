@@ -10,6 +10,7 @@
 # - ?rest_route= 優先でWP下書き/予約/公開（403回避）
 # - カテゴリ選択：Secretsの `wp_configs.<site>.categories` があれば使用 / 無ければRESTで取得
 # - 公開状態：日本語UI（下書き/予約投稿/公開）→ API送信値は英語にマップ
+# - 本文文字数：最小/最大の指定と“厳密制御（不足/超過を自動調整）”対応
 # ------------------------------------------------------------
 from __future__ import annotations
 
@@ -56,7 +57,8 @@ def ensure_trailing_slash(url: str) -> str:
 def api_candidates(base: str, route: str) -> List[str]:
     base = ensure_trailing_slash(base)
     route = route.lstrip("/")
-    return [f"{base}?rest_route=/{route}", f"{base}wp-json/{route}"]  # ?rest_route= 優先
+    # ?rest_route= 優先（WAF回避）
+    return [f"{base}?rest_route=/{route}", f"{base}wp-json/{route}"]
 
 def wp_get(base: str, route: str, auth: HTTPBasicAuth, headers: Dict[str, str]) -> requests.Response | None:
     last = None
@@ -85,11 +87,12 @@ MAX_H2 = 8
 H2_RE = re.compile(r'(<h2>.*?</h2>)', re.IGNORECASE | re.DOTALL)
 
 def simplify_html(html: str) -> str:
+    # 許可タグ以外を除去 + <br>禁止
     tags = re.findall(r'</?(\w+)[^>]*>', html)
     for tag in set(tags):
         if tag.lower() not in ALLOWED_TAGS:
             html = re.sub(rf'</?{tag}[^>]*>', '', html, flags=re.IGNORECASE)
-    html = re.sub(r'<br\s*/?>', '', html, flags=re.IGNORECASE)  # 絶対禁止
+    html = re.sub(r'<br\s*/?>', '', html, flags=re.IGNORECASE)
     return html
 
 def validate_article(html: str) -> List[str]:
@@ -99,6 +102,7 @@ def validate_article(html: str) -> List[str]:
     if re.search(r'<br\s*/?>', html, flags=re.IGNORECASE):
         warns.append("<br> タグは使用禁止です。すべて <p> に置き換えてください。")
 
+    # H2セクションに表/箇条書きが1つ以上あるか
     h2_iter = list(re.finditer(r'(<h2>.*?</h2>)', html, flags=re.DOTALL | re.IGNORECASE))
     for i, m in enumerate(h2_iter):
         start = m.end()
@@ -107,6 +111,7 @@ def validate_article(html: str) -> List[str]:
         if not re.search(r'<(ul|ol|table)\b', section, flags=re.IGNORECASE):
             warns.append("H2セクションに表（table）または箇条書き（ul/ol）が不足しています。")
 
+    # h3直下の<p>分量チェック
     h3_positions = list(re.finditer(r'(<h3>.*?</h3>)', html, flags=re.DOTALL | re.IGNORECASE))
     for i, m in enumerate(h3_positions):
         start = m.end()
@@ -117,12 +122,7 @@ def validate_article(html: str) -> List[str]:
         if p_count < 3 or p_count > 6:
             warns.append("各<h3>直下は4〜5文（<p>）が目安です。分量を調整してください。")
 
-    for p in re.findall(r'<p>(.*?)</p>', html, flags=re.DOTALL | re.IGNORECASE):
-        text = re.sub(r'<.*?>', '', p)
-        if len(text.strip()) > 55:
-            warns.append("一文が55文字を超えています。短く区切ってください。")
-            break
-
+    # 全文ざっくり文字数アラート
     plain = re.sub(r'<.*?>', '', html)
     if len(plain.strip()) > 6000:
         warns.append("記事全体が6000文字を超えています。要約・整理してください。")
@@ -151,6 +151,45 @@ def trim_h2_max(structure_html: str, max_count: int) -> str:
                 out.append(chunk)
             i += 1
     return "".join(out)
+
+# ------------------------------
+# 本文文字数制御ユーティリティ
+# ------------------------------
+def visible_length(html: str) -> int:
+    text = re.sub(r'<.*?>', '', html or '', flags=re.DOTALL)
+    return len(text.strip())
+
+def trim_to_max_chars(html: str, limit: int) -> str:
+    # 後ろから<p>単位で削って上限内に収める（タグ破壊を避ける素朴実装）
+    if visible_length(html) <= limit:
+        return html
+    parts = re.findall(r'(?si).*?(?:<p>.*?</p>|$)', html)
+    out = ""
+    for part in parts:
+        if visible_length(out + part) <= limit:
+            out += part
+        else:
+            break
+    return out if out else html[:limit]
+
+def prompt_append_chars(keyword: str, current_html: str, need_chars: int) -> str:
+    return f"""
+あなたは日本語のSEOライターです。
+以下の既存HTML本文に、不足分として**約{need_chars}文字**の<p>段落を追記してください。
+
+# 制約
+- 新しい<h2>/<h3>は禁止（構成を増やさない）
+- <p>/<ul>/<ol>/<table>のみ使用可
+- 既存内容との重複や矛盾を避ける
+- 1文は55文字以内、<br>禁止
+- 出力は追加部分のHTMLのみ（既存本文は再出力しない）
+
+# キーワード
+{keyword}
+
+# 既存本文
+{current_html}
+""".strip()
 
 # ------------------------------
 # Gemini 呼び出し
@@ -217,7 +256,7 @@ def prompt_fill_h2(keyword: str, existing_structure_html: str, need: int) -> str
 """.strip()
 
 # ------------------------------
-# タイトル/説明
+# タイトル/説明 & スラッグ
 # ------------------------------
 def generate_seo_title(keyword: str, content_dir: str) -> str:
     p = f"""
@@ -241,50 +280,44 @@ def generate_seo_description(keyword: str, content_dir: str, title: str) -> str:
     return re.sub(r'[\n\r]', '', desc)[:120]
 
 def generate_permalink(keyword_or_title: str) -> str:
-# ---- パーマリンク生成（キーワード→ローマ字→SEOスラッグ） -------------------
-        # ---- パーマリンク生成（キーワード→ローマ字→SEOスラッグ） -------------------
-        import re
-        from datetime import datetime
-
+    """日本語をローマ字化してSEOスラッグ生成。空なら post-<timestamp>。"""
+    import re as _re
+    from datetime import datetime as _dt
+    try:
+        from unidecode import unidecode
+        def _jp_to_romaji(s: str) -> str:
+            return unidecode(s)
+    except Exception:
         try:
-            from unidecode import unidecode
+            from pykakasi import kakasi
+            _kk = kakasi()
+            _kk.setMode("J", "a")  # Japanese → ascii
+            _conv = _kk.getConverter()
             def _jp_to_romaji(s: str) -> str:
-                return unidecode(s)
+                return _conv.do(s)
         except Exception:
-            try:
-                from pykakasi import kakasi
-                _kk = kakasi()
-                _kk.setMode("J", "a")  # Japanese → ascii
-                _conv = _kk.getConverter()
-                def _jp_to_romaji(s: str) -> str:
-                    return _conv.do(s)
-            except Exception:
-                def _jp_to_romaji(s: str) -> str:
-                    return s
+            def _jp_to_romaji(s: str) -> str:
+                return s
 
-        def generate_permalink(keyword_or_title: str) -> str:
-            s = (keyword_or_title or "").strip()
-            if not s:
-                return f"post-{int(datetime.now().timestamp())}"
-
-            s = _jp_to_romaji(s).lower()
-            s = s.replace("&", " and ").replace("+", " plus ")
-            s = re.sub(r"[^a-z0-9\s-]", "", s)
-            s = re.sub(r"\s+", "-", s)
-            s = re.sub(r"-{2,}", "-", s).strip("-")
-
-            if len(s) > 50:
-                parts = s.split("-")
-                out = []
-                for p in parts:
-                    if not p:
-                        continue
-                    if len("-".join(out + [p])) > 50:
-                        break
-                    out.append(p)
-                s = "-".join(out) or s[:50]
-
-            return s or f"post-{int(datetime.now().timestamp())}"
+    s = (keyword_or_title or "").strip()
+    if not s:
+        return f"post-{int(_dt.now().timestamp())}"
+    s = _jp_to_romaji(s).lower()
+    s = s.replace("&", " and ").replace("+", " plus ")
+    s = _re.sub(r"[^a-z0-9\s-]", "", s)
+    s = _re.sub(r"\s+", "-", s)
+    s = _re.sub(r"-{2,}", "-", s).strip("-")
+    if len(s) > 50:
+        parts = s.split("-")
+        out = []
+        for p in parts:
+            if not p:
+                continue
+            if len("-".join(out + [p])) > 50:
+                break
+            out.append(p)
+        s = "-".join(out) or s[:50]
+    return s or f"post-{int(_dt.now().timestamp())}"
 
 # ------------------------------
 # ポリシー（統合）管理
@@ -292,7 +325,6 @@ def generate_permalink(keyword_or_title: str) -> str:
 CACHE_PATH = Path("./policies_cache.json")
 DEFAULT_PRESET_NAME = "default"
 
-# 1区分（統合）で保持。ファイルもこの形式で保存・読込する
 DEFAULT_POLICY_TXT = """[リード文]
 # リード文の作成指示:
 ・読者の悩みや不安を共感的に表現すること（例：「〜でお困りではありませんか」）
@@ -309,11 +341,10 @@ DEFAULT_POLICY_TXT = """[リード文]
 ・<h4>、<script>、<style> などは禁止
 ・一文は55文字以内に収めること
 ・一文ごとに独立した<p>タグで記述すること（<br>タグは絶対に使用禁止）
-・一つの文章が終わるごとに改行すること
 ・必要に応じて<ul>、<ol>、<li>、<table>、<tr>、<th>、<td>タグを使用して分かりやすく情報を整理すること
 ・各H2セクションには必ず1つ以上の表（table）または箇条書き（ul/ol）を含めること
 ・手続きの比較、メリット・デメリット、専門家比較、費用比較などは必ず表形式で整理すること
-・メリット・デメリット比較や専門家比較は必ず以下の形式で表を作成すること：
+・メリット・デメリットの比較や専門家比較は必ず以下の形式で表を作成すること：
 　<table><tr><th>項目</th><th>選択肢1</th><th>選択肢2</th></tr><tr><th>メリット</th><td>内容</td><td>内容</td></tr></table>
 ・表のHTMLタグ（table, tr, th, td）を正確に使用すること
 ・表形式が適している情報は必ず表で整理すること
@@ -330,7 +361,7 @@ DEFAULT_POLICY_TXT = """[リード文]
 
 [まとめ文]
 # まとめ文の作成指示:
-・必ず最初に<h2>{keyword}に関するまとめまとめ</h2>を出力すること
+・必ず最初に<h2>{keyword}に関するまとめ</h2>を出力すること
 ・一文ごとに独立した<p>タグで記述すること（<br>タグは絶対に使用禁止）
 ・記事の要点を箇条書きで2-3個簡潔にリストも用いて文中に挿入すること
 ・内容は300文字程度にすること
@@ -353,7 +384,9 @@ def prompt_full_article_unified(keyword: str,
                                 structure_html: str,
                                 readers_txt: str,
                                 needs_txt: str,
-                                banned: List[str]) -> str:
+                                banned: List[str],
+                                min_chars: int,
+                                max_chars: int) -> str:
     lead_pol, body_pol, summary_pol = extract_sections(unified_policy_text)
     # 後方互換：リード/まとめが空なら既定で補完
     if not lead_pol:
@@ -377,6 +410,9 @@ def prompt_full_article_unified(keyword: str,
 あなたはSEOに特化した日本語のプロライターです。
 以下の構成案と各ポリシーに従い、「{keyword}」の記事を
 **リード文 → 本文 → まとめ**まで一気通貫でHTMLのみ出力してください。
+
+# 文字数の目安（厳守努力）
+・記事本文の総文字数は概ね {min_chars}〜{max_chars} 字に収めること
 
 # リード文ポリシー（厳守）
 {lead_pol}
@@ -538,14 +574,12 @@ with colL:
             len(st.session_state.policy_store) > 1 and
             st.session_state.active_policy in st.session_state.policy_store
         )
-
         delete_clicked = st.button(
             "このプリセットを削除",
             disabled=not can_delete,
             help=("default は削除できません / 最低1件は必要です"
                   if not can_delete else "このプリセットを削除します")
         )
-
         if delete_clicked:
             del st.session_state.policy_store[st.session_state.active_policy]
             fallback = DEFAULT_PRESET_NAME if DEFAULT_PRESET_NAME in st.session_state.policy_store else None
@@ -566,6 +600,14 @@ with colM:
     min_h2 = st.number_input("H2の最小数", min_value=1, max_value=12, value=3, step=1)
     if min_h2 > max_h2:
         st.warning("⚠️ H2の最小数が最大数を上回っています。最小≦最大 になるよう調整してください。")
+
+    # 本文文字数の最小/最大＋厳密制御
+    min_chars = st.number_input("本文の最小文字数",  min_value=500,  max_value=20000, value=2000, step=100)
+    max_chars = st.number_input("本文の最大文字数",  min_value=800,  max_value=30000, value=5000, step=100)
+    strict_chars = st.checkbox("厳密制御（不足/超過時に自動調整する）", value=True)
+    max_adjust_tries = st.number_input("自動調整の最大回数", 0, 3, 1, 1)
+    if min_chars > max_chars:
+        st.warning("⚠️ 本文の最小文字数が最大文字数を上回っています。")
 
     # ①〜③ 生成
     if st.button("①〜③（読者像/ニーズ/構成）を生成"):
@@ -620,12 +662,40 @@ with colM:
             structure_html=structure_html,
             readers_txt=readers_txt,
             needs_txt=needs_txt,
-            banned=merged_banned
+            banned=merged_banned,
+            min_chars=min_chars,
+            max_chars=max_chars
         ))
         full = simplify_html(full)
         st.session_state["assembled_html"] = full
         st.session_state["edited_html"] = full
         st.session_state["use_edited"] = True
+
+        # ===== 文字数の厳密制御（不足/超過の自動調整）=====
+        if strict_chars:
+            tries = 0
+            html_cur = st.session_state["edited_html"]
+            while tries < max_adjust_tries:
+                cur_len = visible_length(html_cur)
+                if cur_len < min_chars:
+                    need = min(min_chars - cur_len, max_chars - cur_len)
+                    if need <= 0:
+                        break
+                    try:
+                        add = call_gemini(prompt_append_chars(keyword, html_cur, need)).strip()
+                        add = simplify_html(add)
+                        if not add or visible_length(add) < 100:
+                            break
+                        html_cur = (html_cur.rstrip() + "\n\n" + add)
+                    except Exception:
+                        break
+                elif cur_len > max_chars:
+                    html_cur = trim_to_max_chars(html_cur, max_chars)
+                    break
+                else:
+                    break
+                tries += 1
+            st.session_state["edited_html"] = html_cur
 
     # プレビュー & 編集
     assembled = st.session_state.get("assembled_html", "")
@@ -733,8 +803,6 @@ with colR:
             date_gmt = dt_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
         final_slug = (slug.strip() or generate_permalink(keyword))
-        payload["slug"] = final_slug
-
 
         payload = {
             "title": title.strip(),
