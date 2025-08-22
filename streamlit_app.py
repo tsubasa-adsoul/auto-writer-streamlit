@@ -7,10 +7,11 @@
 # - 記事（リード→本文→まとめ）は 1 回のリクエストで一括生成
 # - 禁止事項は手入力のみ（アップロードなし）
 # - ポリシープリセット：.txt読み込み→選択→編集→上書き/削除→ローカルキャッシュでF5後も維持
-# - ?rest_route= 優先でWP下書き/予約/公開（403回避）
-# - カテゴリ選択：Secretsの `wp_configs.<site>.categories` があれば使用 / 無ければRESTで取得
+# - ?rest_route= 優先でWP下書き/予約/公開（WAF回避）＋ JSON応答のみ合格判定
+# - カテゴリ選択：Secretsの `wp_configs.<site>.categories` があれば使用 / 無ければREST or Secrets[wp_categories]で取得
 # - 公開状態：日本語UI（下書き/予約投稿/公開）→ API送信値は英語にマップ
 # - 本文文字数：最小/最大の指定と“厳密制御（不足/超過を自動調整）”対応
+# - スラッグ：サイト別モード（cfg.slug_mode: romanize/title/auto）＋手入力最優先
 # ------------------------------------------------------------
 from __future__ import annotations
 
@@ -60,23 +61,38 @@ def api_candidates(base: str, route: str) -> List[str]:
     # ?rest_route= 優先（WAF回避）
     return [f"{base}?rest_route=/{route}", f"{base}wp-json/{route}"]
 
+def _is_json_response(r: requests.Response | None) -> bool:
+    if r is None:
+        return False
+    ct = (r.headers.get("Content-Type") or "").lower()
+    if "application/json" in ct:
+        return True
+    body = (r.text or "").lstrip()
+    return body.startswith("{") or body.startswith("[")
+
 def wp_get(base: str, route: str, auth: HTTPBasicAuth, headers: Dict[str, str]) -> requests.Response | None:
     last = None
     for url in api_candidates(base, route):
-        r = requests.get(url, auth=auth, headers=headers, timeout=20)
-        last = r
-        if r.status_code == 200:
-            return r
+        try:
+            r = requests.get(url, auth=auth, headers=headers, timeout=20)
+            last = r
+            if r.status_code == 200 and _is_json_response(r):
+                return r
+        except Exception:
+            continue
     return last
 
 def wp_post(base: str, route: str, auth: HTTPBasicAuth, headers: Dict[str, str],
             json_payload: Dict[str, Any]) -> requests.Response | None:
     last = None
     for url in api_candidates(base, route):
-        r = requests.post(url, auth=auth, headers=headers, json=json_payload, timeout=45)
-        last = r
-        if r.status_code in (200, 201):
-            return r
+        try:
+            r = requests.post(url, auth=auth, headers=headers, json=json_payload, timeout=45)
+            last = r
+            if r.status_code in (200, 201) and _is_json_response(r):
+                return r
+        except Exception:
+            continue
     return last
 
 # ------------------------------
@@ -470,8 +486,10 @@ AUTH = HTTPBasicAuth(cfg["user"], cfg["password"])
 
 if st.sidebar.button("🔐 認証 /users/me"):
     r = wp_get(BASE, "wp/v2/users/me", AUTH, HEADERS)
-    st.sidebar.code(f"GET users/me → {r.status_code if r else 'N/A'}")
-    st.sidebar.caption((r.text[:300] if r is not None else "No response"))
+    code = (r.status_code if r is not None else 'N/A')
+    st.sidebar.code(f"GET users/me → {code}")
+    preview = (r.text[:300] if r is not None else "No response")
+    st.sidebar.caption(preview)
 
 # ------------------------------
 # セッション初期化（統合版）
@@ -492,11 +510,11 @@ if cached:
     if ap in st.session_state.policy_store:
         st.session_state.active_policy = ap
 
-# default 補完
+# default 補完（強固）
 if DEFAULT_PRESET_NAME not in st.session_state.policy_store:
     st.session_state.policy_store[DEFAULT_PRESET_NAME] = DEFAULT_POLICY_TXT
-    if st.session_state.active_policy not in st.session_state.policy_store:
-        st.session_state.active_policy = DEFAULT_PRESET_NAME
+if st.session_state.active_policy not in st.session_state.policy_store:
+    st.session_state.active_policy = DEFAULT_PRESET_NAME
 
 # 編集用 state を1本化
 cur_txt = st.session_state.policy_store[st.session_state.active_policy]
@@ -539,6 +557,9 @@ with colL:
 
     # プリセット選択
     names = sorted(st.session_state.policy_store.keys())
+    if not names:
+        st.session_state.policy_store[DEFAULT_PRESET_NAME] = DEFAULT_POLICY_TXT
+        names = [DEFAULT_PRESET_NAME]
     sel_index = names.index(st.session_state.active_policy) if st.session_state.active_policy in names else 0
     sel_name = st.selectbox("適用するポリシー", names, index=sel_index)
     if sel_name != st.session_state.active_policy:
@@ -562,7 +583,7 @@ with colL:
             st.success(f"『{st.session_state.active_policy}』を更新しました。")
     with cB:
         st.download_button(
-            "この内容をPCへで保存",
+            "この内容をPCへ保存",
             data=st.session_state.get("policy_text", ""),
             file_name=f"{st.session_state.active_policy}.txt",
             mime="text/plain",
@@ -590,6 +611,13 @@ with colL:
             st.session_state.policy_text = st.session_state.policy_store[fallback]
             save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
             st.warning("プリセットを削除しました。")
+    with cD:
+        if st.button("🔁 プリセットを初期状態に戻す"):
+            st.session_state.policy_store = {DEFAULT_PRESET_NAME: DEFAULT_POLICY_TXT}
+            st.session_state.active_policy = DEFAULT_PRESET_NAME
+            st.session_state.policy_text = DEFAULT_POLICY_TXT
+            save_policies_to_cache(st.session_state.policy_store, st.session_state.active_policy)
+            st.success("初期状態にリセットしました。")
 
 # ------ 中：生成 & プレビュー ------
 with colM:
@@ -740,10 +768,10 @@ with colR:
                 st.session_state["excerpt"] = generate_seo_description(keyword, content_dir, t)
 
     title = st.text_input("タイトル", value=st.session_state.get("title", ""))
-    slug = st.text_input("スラッグ（空ならキーワードから自動）", value="")
+    slug = st.text_input("スラッグ（空ならサイト設定に従って自動）", value="")
     excerpt = st.text_area("ディスクリプション（抜粋）", value=st.session_state.get("excerpt", ""), height=80)
 
-    # ▼ カテゴリーUI
+    # ▼ カテゴリーUI（excerpt と 公開状態の間）
     def fetch_categories(base_url: str, auth: HTTPBasicAuth) -> List[Tuple[str, int]]:
         try:
             r = wp_get(base_url, "wp/v2/categories?per_page=100&_fields=id,name", auth, HEADERS)
@@ -755,7 +783,7 @@ with colR:
             pass
         return []
 
-    cfg_cats_map: Dict[str, int] = dict(cfg.get("categories", {}))
+    cfg_cats_map: Dict[str, int] = dict(cfg.get("categories", {}))  # 推奨：サイトごとにここへ設定
     cats: List[Tuple[str, int]] = []
     if cfg_cats_map:
         cats = sorted([(name, int(cid)) for name, cid in cfg_cats_map.items()], key=lambda x: x[0])
@@ -770,7 +798,7 @@ with colR:
     sel_labels: List[str] = st.multiselect("カテゴリー（複数可）", cat_labels, default=[])
     selected_cat_ids: List[int] = [cid for (name, cid) in cats if name in sel_labels]
     if not cats:
-        st.info("このサイトで選べるカテゴリーが見つかりませんでした。Secretsの `wp_configs.<site_key>.categories` を確認してください。")
+        st.info("このサイトで選べるカテゴリーが見つかりませんでした。Secretsの `wp_configs.<site>.categories` を確認してください。")
 
     # 公開状態（日本語ラベル → API値）
     status_options = {"下書き": "draft", "予約投稿": "future", "公開": "publish"}
@@ -803,7 +831,7 @@ with colR:
             date_gmt = dt_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
         # --- スラッグ判定ロジック ---
-        slug_mode = (cfg.get("slug_mode") or "romanize").lower()  # デフォルト romanize
+        slug_mode = (cfg.get("slug_mode") or "romanize").lower()  # 既定 romanize（kau-ru は "auto" 推奨）
         typed_slug = slug.strip() if slug else ""
         final_slug = None
 
@@ -834,7 +862,7 @@ with colR:
             payload["slug"] = final_slug
 
         r = wp_post(BASE, "wp/v2/posts", AUTH, HEADERS, json_payload=payload)
-        if r is None or r.status_code not in (200, 201):
+        if r is None or r.status_code not in (200, 201) or not _is_json_response(r):
             st.error(f"投稿失敗: {r.status_code if r else 'N/A'}")
             if r is not None:
                 st.code(r.text[:1000])
