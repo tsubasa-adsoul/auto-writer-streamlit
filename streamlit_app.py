@@ -516,7 +516,7 @@ with colL:
     extra_points = st.text_area("特に加えてほしい内容（任意）", height=90)
 
     st.markdown("### 🔗 共起語（任意）")
-    st.caption("改行またはカンマ区切り。本文に“自然に”散りばめます（過剰詰め込みはしません）。")
+    st.caption("改行またはカンマ区切り。本文に“自然に”散りばめます（例：審査, 即日, 最短, 手数料）。")
     co_terms_text = st.text_area("共起語リスト", value=st.session_state.get("co_terms_text", ""), height=120)
     st.session_state["co_terms_text"] = co_terms_text
     co_terms: List[str] = []
