@@ -732,6 +732,8 @@ with colR:
             date_gmt = dt_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
         final_slug = (slug.strip() or generate_permalink(keyword))
+        payload["slug"] = final_slug
+
 
         payload = {
             "title": title.strip(),
