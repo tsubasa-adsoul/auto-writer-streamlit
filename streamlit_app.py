@@ -609,6 +609,8 @@ with colR:
     sched_date = st.date_input("予約日（予約投稿用）")
     sched_time = st.time_input("予約時刻（予約投稿用）", value=dt_time(9, 0))
 
+    else:
+
     if st.button("📝 WPに下書き/投稿する", type="primary", use_container_width=True):
         if not keyword.strip():
             st.error("キーワードは必須です。")
