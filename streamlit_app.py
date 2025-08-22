@@ -582,7 +582,7 @@ with colR:
         sc_map: dict[str, int] = st.secrets.get("wp_categories", {}).get(site_key, {})
         if sc_map:
             cats = sorted([(name, int(cid)) for name, cid in sc_map.items()], key=lambda x: x[0])
-        else:
+        else:    if st.button("📝 WPに下書き/投稿する", type="primary", use_container_width=True):
             # 3) 最後の手段：RESTで取得
             cats = fetch_categories(BASE, AUTH)
 
@@ -617,44 +617,49 @@ with colR:
             st.error("タイトルは必須です。")
             st.stop()
 
+        # 本文
         content_html = (ss.get("edited_html") if ss.get("use_edited") else ss.get("assembled_html", "")).strip()
         if not content_html:
             st.error("本文が未生成です。『記事を一括生成』で作成し、必要なら編集してください。")
             st.stop()
-
         content_html = simplify_html(content_html)
 
+        # 予約日時（future のみ）
         date_gmt = None
         if status == "future":
             from datetime import datetime as _dt
             dt_local = _dt.combine(sched_date, sched_time)
             date_gmt = dt_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
+        # スラッグ
         final_slug = (slug.strip() or generate_permalink(title or keyword))
 
-    payload = {
-        "title": title.strip(),
-        "content": content_html,
-        "status": status,
-        "slug": final_slug,
-        "excerpt": excerpt.strip(),
-    }
-    if date_gmt:
-        payload["date_gmt"] = date_gmt
+        # ▼ payload はここ（ボタン内）で組み立てる
+        payload = {
+            "title": title.strip(),
+            "content": content_html,
+            "status": status,
+            "slug": final_slug,
+            "excerpt": excerpt.strip(),
+        }
+        if date_gmt:
+            payload["date_gmt"] = date_gmt
 
-    # カテゴリ（ID配列）
-    if selected_cat_ids:
-        payload["categories"] = selected_cat_ids
+        # カテゴリ（ID配列）— 選択されていれば追加
+        if selected_cat_ids:
+            payload["categories"] = selected_cat_ids
 
-
+        # 投稿実行（カテゴリ未選択でも必ずここを通る）
         r = wp_post(BASE, "wp/v2/posts", AUTH, HEADERS, json_payload=payload)
-        if r.status_code not in (200, 201):
-            st.error(f"投稿失敗: {r.status_code}")
-            st.code(r.text[:1000])
+        if r is None or r.status_code not in (200, 201):
+            st.error(f"投稿失敗: {getattr(r,'status_code', 'no-response')}")
+            st.code(getattr(r,'text','')[:1000])
             st.stop()
+
         data = r.json()
         st.success(f"投稿成功！ID={data.get('id')} / status={data.get('status')}")
         st.write("URL:", data.get("link", ""))
         st.json({k: data.get(k) for k in ["id", "slug", "status", "date", "link"]})
+
 
 # 以上
