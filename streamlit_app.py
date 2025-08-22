@@ -559,11 +559,11 @@ with colR:
     # （既存）ディスクリプション入力
     excerpt = st.text_area("ディスクリプション（抜粋）", value=ss.get("excerpt", ""), height=80)
 
-    # ▼ここから追加：サイトのカテゴリを取得→選択UI
+    # ▼ここから：カテゴリーUI（cfg.categories → wp_categories → REST の順で取得）
     def fetch_categories(base_url: str, auth: HTTPBasicAuth) -> list[tuple[str, int]]:
-        """RESTでカテゴリ一覧を取得して (label, id) リストを返す。失敗なら空。"""
+        """RESTでカテゴリ一覧を取得して (label, id) のリストを返す。失敗なら空。"""
         try:
-            r = wp_get(base_url, "wp/v2/categories?per_page=100", auth, HEADERS)
+            r = wp_get(base_url, "wp/v2/categories?per_page=100&_fields=id,name", auth, HEADERS)
             if r is not None and r.status_code == 200:
                 data = r.json()
                 pairs = [(c.get("name", "(no name)"), int(c.get("id"))) for c in data if c.get("id") is not None]
@@ -572,21 +572,27 @@ with colR:
             pass
         return []
 
-    # RESTで取れない/403の環境向けフォールバック（Secrets に ID マップを置く運用）
-    # Secrets 例：
-    # [wp_categories.sakibarai-kaitori]
-    # "先払い買取コラム" = 2
-    # "先払い買取業者"   = 3
-    site_cat_map: dict[str, int] = st.secrets.get("wp_categories", {}).get(site_key, {})
-    cats: list[tuple[str, int]] = fetch_categories(BASE, AUTH)
-    if not cats and site_cat_map:
-        cats = sorted([(name, int(cid)) for name, cid in site_cat_map.items()], key=lambda x: x[0])
+    # 1) Secrets: [wp_configs.<site_key>].categories を最優先
+    cfg_cats_map: dict[str, int] = dict(cfg.get("categories", {}))  # cfg は WP_CONFIGS[site_key]
+    cats: list[tuple[str, int]] = []
+    if cfg_cats_map:
+        cats = sorted([(name, int(cid)) for name, cid in cfg_cats_map.items()], key=lambda x: x[0])
+    else:
+        # 2) Secrets: [wp_categories.<site_key>] フォールバック
+        sc_map: dict[str, int] = st.secrets.get("wp_categories", {}).get(site_key, {})
+        if sc_map:
+            cats = sorted([(name, int(cid)) for name, cid in sc_map.items()], key=lambda x: x[0])
+        else:
+            # 3) 最後の手段：RESTで取得
+            cats = fetch_categories(BASE, AUTH)
 
+    # UI
     cat_labels = [name for (name, _cid) in cats]
-    default_labels: list[str] = []  # 既定選択したいラベルがあればここに入れる
+    default_labels: list[str] = []  # 既定選択したいラベルがあれば入れる（例: ["先払い買取コラム"]）
     sel_labels: list[str] = st.multiselect("カテゴリー（複数可）", cat_labels, default=default_labels)
     selected_cat_ids: list[int] = [cid for (name, cid) in cats if name in sel_labels]
-    # ▲ここまで追加
+    if not cats:
+        st.info("このサイトで選べるカテゴリーが見つかりませんでした。Secretsの `wp_configs.<site_key>.categories` を確認してください。")
 
     # （既存）公開状態などはこの下に続く
     status = st.selectbox("公開状態", ["draft", "future", "publish"], index=0)
@@ -616,19 +622,20 @@ with colR:
 
         final_slug = (slug.strip() or generate_permalink(title or keyword))
 
-        payload = {
-            "title": title.strip(),
-            "content": content_html,
-            "status": status,
-            "slug": final_slug,
-            "excerpt": excerpt.strip(),
-        }
-        if date_gmt:
-            payload["date_gmt"] = date_gmt
+    payload = {
+        "title": title.strip(),
+        "content": content_html,
+        "status": status,
+        "slug": final_slug,
+        "excerpt": excerpt.strip(),
+    }
+    if date_gmt:
+        payload["date_gmt"] = date_gmt
 
-            # ▼ここを追加：カテゴリ（ID配列）
-        if selected_cat_ids:
-            payload["categories"] = selected_cat_ids
+    # カテゴリ（ID配列）
+    if selected_cat_ids:
+        payload["categories"] = selected_cat_ids
+
 
         r = wp_post(BASE, "wp/v2/posts", AUTH, HEADERS, json_payload=payload)
         if r.status_code not in (200, 201):
