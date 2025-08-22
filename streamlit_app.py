@@ -559,8 +559,8 @@ with colR:
     # （既存）ディスクリプション入力
     excerpt = st.text_area("ディスクリプション（抜粋）", value=ss.get("excerpt", ""), height=80)
 
-    # ▼ここから：カテゴリーUI（cfg.categories → wp_categories → REST の順で取得）
-    def fetch_categories(base_url: str, auth: HTTPBasicAuth) -> list[tuple[str, int]]:
+    # ▼ カテゴリーUI（cfg.categories → wp_categories → REST の順で取得）
+    def fetch_categories(base_url, auth):
         """RESTでカテゴリ一覧を取得して (label, id) のリストを返す。失敗なら空。"""
         try:
             r = wp_get(base_url, "wp/v2/categories?per_page=100&_fields=id,name", auth, HEADERS)
@@ -573,44 +573,39 @@ with colR:
         return []
 
     # 1) Secrets: [wp_configs.<site_key>].categories を最優先
-    cfg_cats_map: dict[str, int] = dict(cfg.get("categories", {}))  # cfg は WP_CONFIGS[site_key]
-    cats: list[tuple[str, int]] = []
+    cfg_cats_map = dict(cfg.get("categories", {}))  # cfg は WP_CONFIGS[site_key]
+    cats = []
     if cfg_cats_map:
         cats = sorted([(name, int(cid)) for name, cid in cfg_cats_map.items()], key=lambda x: x[0])
     else:
         # 2) Secrets: [wp_categories.<site_key>] フォールバック
-        sc_map: dict[str, int] = st.secrets.get("wp_categories", {}).get(site_key, {})
+        sc_map = st.secrets.get("wp_categories", {}).get(site_key, {})
         if sc_map:
             cats = sorted([(name, int(cid)) for name, cid in sc_map.items()], key=lambda x: x[0])
-        else:    if st.button("📝 WPに下書き/投稿する", type="primary", use_container_width=True):
+        else:
             # 3) 最後の手段：RESTで取得
             cats = fetch_categories(BASE, AUTH)
 
-    # UI
+    # カテゴリ選択UI
     cat_labels = [name for (name, _cid) in cats]
-    default_labels: list[str] = []  # 既定選択したいラベルがあれば入れる（例: ["先払い買取コラム"]）
-    sel_labels: list[str] = st.multiselect("カテゴリー（複数可）", cat_labels, default=default_labels)
-    selected_cat_ids: list[int] = [cid for (name, cid) in cats if name in sel_labels]
+    default_labels = []  # 既定選択が必要なら例: ["先払い買取コラム"]
+    sel_labels = st.multiselect("カテゴリー（複数可）", cat_labels, default=default_labels)
+    selected_cat_ids = [cid for (name, cid) in cats if name in sel_labels]
     if not cats:
-        st.info("このサイトで選べるカテゴリーが見つかりませんでした。Secretsの `wp_configs.<site_key>.categories` を確認してください。")
+        st.info("このサイトで選べるカテゴリーが見つかりませんでした。Secrets の `wp_configs.<site_key>.categories` を確認してください。")
 
-    # （既存）公開状態などはこの下に続く
+    # ▼ 公開状態（日本語UI → 英語コード）
     status_options = {
         "下書き": "draft",
         "予約投稿": "future",
-        "公開": "publish"
+        "公開": "publish",
     }
-
-    # セレクトボックスは日本語表示
     status_label = st.selectbox("公開状態", list(status_options.keys()), index=0)
-
-    # 実際に送信する値は英語
     status = status_options[status_label]
     sched_date = st.date_input("予約日（予約投稿用）")
     sched_time = st.time_input("予約時刻（予約投稿用）", value=dt_time(9, 0))
 
-    else:
-
+    # ▼ 投稿ボタン（ここから下は 1 つの if ブロック内で完結）
     if st.button("📝 WPに下書き/投稿する", type="primary", use_container_width=True):
         if not keyword.strip():
             st.error("キーワードは必須です。")
@@ -636,7 +631,7 @@ with colR:
         # スラッグ
         final_slug = (slug.strip() or generate_permalink(title or keyword))
 
-        # ▼ payload はここ（ボタン内）で組み立てる
+        # payload を組み立て
         payload = {
             "title": title.strip(),
             "content": content_html,
@@ -651,7 +646,7 @@ with colR:
         if selected_cat_ids:
             payload["categories"] = selected_cat_ids
 
-        # 投稿実行（カテゴリ未選択でも必ずここを通る）
+        # 投稿実行
         r = wp_post(BASE, "wp/v2/posts", AUTH, HEADERS, json_payload=payload)
         if r is None or r.status_code not in (200, 201):
             st.error(f"投稿失敗: {getattr(r,'status_code', 'no-response')}")
@@ -662,6 +657,3 @@ with colR:
         st.success(f"投稿成功！ID={data.get('id')} / status={data.get('status')}")
         st.write("URL:", data.get("link", ""))
         st.json({k: data.get(k) for k in ["id", "slug", "status", "date", "link"]})
-
-
-# 以上
