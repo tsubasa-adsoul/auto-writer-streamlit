@@ -153,6 +153,32 @@ def trim_h2_max(structure_html: str, max_count: int) -> str:
 # ------------------------------
 # 本文文字数制御（必要なら再利用）
 # ------------------------------
+
+import re
+
+def _has_summary(html: str) -> bool:
+    return bool(re.search(r'<h2>\s*まとめ\s*</h2>', html, flags=re.IGNORECASE))
+
+def _extract_h2_titles(html: str):
+    titles = re.findall(r'<h2>(.*?)</h2>', html, flags=re.IGNORECASE|re.DOTALL)
+    clean = [re.sub(r'<.*?>', '', t).strip() for t in titles]
+    return [t for t in clean if t and t not in ("はじめに", "まとめ")]
+
+def _append_fallback_summary(html: str) -> str:
+    heads = _extract_h2_titles(html)[:3]
+    bullets = "".join([f"<li>{h}の要点を確認しましょう。</li>" for h in heads]) or "<li>本記事の要点を振り返りましょう。</li>"
+    fallback = (
+        "\n<h2>まとめ</h2>\n"
+        "<p>本記事のポイントを簡潔に整理します。</p>\n"
+        f"<ul>{bullets}</ul>\n"
+        "<p>詳細は各セクションを参照し、実践へつなげてください。</p>\n"
+    )
+    return (html.rstrip() + "\n\n" + fallback)
+
+
+# ------------------------------
+# 本文文字数制御（必要なら再利用）
+# ------------------------------
 def visible_length(html: str) -> int:
     text = re.sub(r'<.*?>', '', html or '', flags=re.DOTALL)
     return len(text.strip())
@@ -679,6 +705,11 @@ with colM:
         st.session_state["assembled_html"] = full
         st.session_state["edited_html"] = full
         st.session_state["use_edited"] = True
+
+        html_cur = st.session_state.get("edited_html", "")
+        if html_cur and not _has_summary(html_cur):
+            st.info("自動ガード: まとめが見つからなかったため、ローカルで補完しました。")
+            st.session_state["edited_html"] = _append_fallback_summary(html_cur)
 
         # 文字数厳密制御
         if strict_chars:
