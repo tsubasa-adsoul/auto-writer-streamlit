@@ -277,7 +277,7 @@ def prompt_full_article_unified(keyword: str,
 """
     if not summary_pol:
         summary_pol = """# まとめ文の作成指示:
-・最初に<h2>まとめ</h2>
+・最初に<h2>{keyword}に関するまとめ</h2>
 ・要点を2-3個リストで挿入
 ・約300文字
 """
