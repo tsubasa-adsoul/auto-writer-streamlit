@@ -84,8 +84,8 @@ def wp_post(base: str, route: str, auth: HTTPBasicAuth, headers: Dict[str, str],
 import re
 
 def _has_summary(html: str) -> bool:
-    """<h2>まとめ</h2> が本文にあるか判定（大文字小文字無視）"""
-    return bool(re.search(r'(?i)<h2>\s*まとめ\s*</h2>', html or ""))
+    """<h2>タグ内に「まとめ」を含む見出しがあるか判定（大文字小文字無視）"""
+    return bool(re.search(r'(?i)<h2>[^<]*まとめ[^<]*</h2>', html or ""))
 
 def _extract_h2_titles(html: str):
     """本文中の <h2> タイトルを配列で返す（HTMLタグ除去、はじめに/まとめ除外）"""
