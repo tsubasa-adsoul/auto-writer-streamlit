@@ -80,6 +80,32 @@ def wp_post(base: str, route: str, auth: HTTPBasicAuth, headers: Dict[str, str],
             return r
     return last
 
+# ==== まとめ欠落の自動補完ヘルパー ====
+import re
+
+def _has_summary(html: str) -> bool:
+    """<h2>まとめ</h2> が本文にあるか判定（大文字小文字無視）"""
+    return bool(re.search(r'(?i)<h2>\s*まとめ\s*</h2>', html or ""))
+
+def _extract_h2_titles(html: str):
+    """本文中の <h2> タイトルを配列で返す（HTMLタグ除去、はじめに/まとめ除外）"""
+    titles = re.findall(r'(?is)<h2>(.*?)</h2>', html or "")
+    clean = [re.sub(r'<.*?>', '', t).strip() for t in titles]
+    return [t for t in clean if t and t not in ("はじめに", "まとめ")]
+
+def _append_fallback_summary(html: str) -> str:
+    """<h2>まとめ</h2> が無いときに、ローカルで汎用のまとめを末尾に付与（LLM不使用＝追加料金ゼロ）"""
+    heads = _extract_h2_titles(html)[:3]
+    bullets = "".join([f"<li>{h}の要点を確認しましょう。</li>" for h in heads]) or "<li>本記事の要点を振り返りましょう。</li>"
+    fallback = (
+        "\n<h2>まとめ</h2>\n"
+        "<p>本記事のポイントを簡潔に整理します。</p>\n"
+        f"<ul>{bullets}</ul>\n"
+        "<p>詳細は各セクションを参照し、実践へつなげてください。</p>\n"
+    )
+    return (html.rstrip() + "\n\n" + fallback)
+
+
 # ------------------------------
 # 生成ユーティリティ / バリデータ
 # ------------------------------
