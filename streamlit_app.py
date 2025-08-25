@@ -156,25 +156,43 @@ def trim_h2_max(structure_html: str, max_count: int) -> str:
 
 import re
 
-def _has_summary(html: str) -> bool:
-    return bool(re.search(r'<h2>\s*まとめ\s*</h2>', html, flags=re.IGNORECASE))
+def _summary_span(html: str) -> tuple[int, int] | None:
+    """<h2>まとめ</h2> セクションの [開始, 終了) インデックスを返す。無ければ None。"""
+    m = re.search(r'(?i)<h2>\s*まとめ\s*</h2>', html)
+    if not m:
+        return None
+    start = m.start()
+    # 次の<h2> までが まとめセクション
+    m2 = re.search(r'(?i)<h2>', html[m.end():])
+    end = m.end() + (m2.start() if m2 else 0)
+    return (start, end if m2 else len(html))
 
-def _extract_h2_titles(html: str):
-    titles = re.findall(r'<h2>(.*?)</h2>', html, flags=re.IGNORECASE|re.DOTALL)
-    clean = [re.sub(r'<.*?>', '', t).strip() for t in titles]
-    return [t for t in clean if t and t not in ("はじめに", "まとめ")]
+def _visible_len(s: str) -> int:
+    return len(re.sub(r'<.*?>', '', s or '', flags=re.DOTALL).strip())
 
-def _append_fallback_summary(html: str) -> str:
-    heads = _extract_h2_titles(html)[:3]
-    bullets = "".join([f"<li>{h}の要点を確認しましょう。</li>" for h in heads]) or "<li>本記事の要点を振り返りましょう。</li>"
-    fallback = (
-        "\n<h2>まとめ</h2>\n"
-        "<p>本記事のポイントを簡潔に整理します。</p>\n"
-        f"<ul>{bullets}</ul>\n"
-        "<p>詳細は各セクションを参照し、実践へつなげてください。</p>\n"
-    )
-    return (html.rstrip() + "\n\n" + fallback)
+def _trim_by_p(html_block: str, limit: int) -> str:
+    """<p>単位で前から積み上げて limit 以内に収める（タグは壊さない素朴版）。"""
+    parts = re.findall(r'(?si).*?(?:<p>.*?</p>|$)', html_block)
+    out = ""
+    for part in parts:
+        cand = out + part
+        if _visible_len(cand) <= limit:
+            out = cand
+        else:
+            break
+    return out if out else html_block[:limit]
 
+def cap_summary(html: str, limit_chars: int = 320) -> str:
+    """まとめセクションを limit_chars 以内にカット（<p>単位）。"""
+    span = _summary_span(html)
+    if not span:
+        return html
+    s, e = span
+    head = html[:s]
+    body = html[s:e]
+    tail = html[e:]
+    trimmed = _trim_by_p(body, limit_chars)
+    return head + trimmed + tail
 
 # ------------------------------
 # 本文文字数制御（必要なら再利用）
@@ -735,6 +753,18 @@ with colM:
                     break
                 tries += 1
             st.session_state["edited_html"] = html_cur
+
+            # --- まとめの長さをローカルで強制キャップ（追加料金ゼロ） ---
+            html_cur = st.session_state.get("edited_html", "")
+            if html_cur:
+                # まとめは約300字目安 → 上限320字でキャップ
+                html_cur = cap_summary(html_cur, limit_chars=320)
+                # 全体が上限を超える場合は最後に安全カット
+                if visible_length(html_cur) > max_chars:
+                    html_cur = trim_to_max_chars(html_cur, max_chars)
+                st.session_state["edited_html"] = html_cur
+                st.session_state["assembled_html"] = html_cur  # プレビュー側も同期
+    
 
     # プレビュー & 編集
     assembled = st.session_state.get("assembled_html", "")
