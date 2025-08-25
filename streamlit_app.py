@@ -321,6 +321,56 @@ def call_gemini(prompt: str, temperature: float = 0.2) -> str:
     j = r.json()
     return j["candidates"][0]["content"]["parts"][0]["text"]
 
+# 既存の関数はそのまま保持（バックアップ用）
+def generate_seo_title(keyword: str, content_dir: str) -> str:
+    """SEOタイトル生成（バックアップ用）"""
+    p = f"""
+# 役割: SEO編集者
+# 指示: 以下のキーワードから魅力的なSEOタイトルを生成
+
+# 制約:
+- 32文字以内
+- 日本語のみ
+- 【】や｜禁止
+- キーワードを自然に含める
+- クリックしたくなる魅力的な内容
+
+# 入力:
+- キーワード: {keyword}
+- 方向性: {content_dir}
+
+# 出力: タイトルのみ
+"""
+    result = call_gemini(p).strip()
+    # クリーニング
+    result = re.sub(r'[【】｜\n\r]', '', result)[:32]
+    return result
+
+def generate_seo_description(keyword: str, content_dir: str, title: str) -> str:
+    """メタディスクリプション生成（バックアップ用）"""
+    p = f"""
+# 役割: SEO編集者
+# 指示: 以下の情報からメタディスクリプションを生成
+
+# 制約:
+- 120字以内
+- 定型「〜を解説/紹介」禁止
+- 数字や具体メリットを含める
+- CTRを高める表現
+
+# 入力:
+- キーワード: {keyword}
+- タイトル: {title}
+- 方向性: {content_dir}
+
+# 出力: 説明文のみ
+"""
+    result = call_gemini(p).strip()
+    # クリーニング
+    result = re.sub(r'[\n\r]', '', result)[:120]
+    return result
+
+
 # ------------------------------
 # プロンプト群（共起語対応）
 # ------------------------------
@@ -441,26 +491,48 @@ def prompt_full_article_unified(keyword: str,
 # ------------------------------
 # タイトル/説明 & スラッグ
 # ------------------------------
-def generate_seo_title(keyword: str, content_dir: str) -> str:
+def generate_title_and_description_unified(keyword: str, content_dir: str) -> tuple[str, str]:
+    """タイトルとメタディスクリプションを1回で生成"""
     p = f"""
 # 役割: SEO編集者
-# 指示: 32文字以内・日本語・【】や｜禁止。自然にキーワードを含めクリックしたくなる1本だけ。
-# 入力: キーワード={keyword} / 方向性={content_dir}
-# 出力: タイトルのみ
-"""
-    title = call_gemini(p).strip()
-    title = re.sub(r'[【】｜\n\r]', '', title)
-    return title[:32]
+# 指示: 以下を同時に生成してください
 
-def generate_seo_description(keyword: str, content_dir: str, title: str) -> str:
-    p = f"""
-# 役割: SEO編集者
-# 指示: 120字以内。定型「〜を解説/紹介」禁止。数字や具体メリットを入れてCTRを高める。
-# 入力: キーワード={keyword} / タイトル={title} / 方向性={content_dir}
-# 出力: 説明文のみ
+## 1. SEOタイトル
+- 32文字以内
+- 日本語のみ
+- 【】や｜禁止
+- キーワードを自然に含める
+- クリックしたくなる魅力的な内容
+
+## 2. メタディスクリプション  
+- 120字以内
+- 定型「〜を解説/紹介」禁止
+- 数字や具体メリットを含める
+- CTRを高める表現
+
+# 入力
+- キーワード: {keyword}
+- 方向性: {content_dir}
+
+# 出力フォーマット（厳守）
+タイトル: ここにタイトル
+説明: ここに説明文
 """
-    desc = call_gemini(p).strip()
-    return re.sub(r'[\n\r]', '', desc)[:120]
+    result = call_gemini(p).strip()
+    
+    # 結果をパース
+    title_match = re.search(r'タイトル:\s*(.+)', result)
+    desc_match = re.search(r'説明:\s*(.+)', result)
+    
+    title = title_match.group(1).strip() if title_match else f"{keyword}について"
+    desc = desc_match.group(1).strip() if desc_match else f"{keyword}に関する情報をお届けします。"
+    
+    # クリーニング
+    title = re.sub(r'[【】｜\n\r]', '', title)[:32]
+    desc = re.sub(r'[\n\r]', '', desc)[:120]
+    
+    return title, desc
+
 
 def generate_permalink(keyword_or_title: str) -> str:
     import re as _re
@@ -868,6 +940,7 @@ with colM:
         st.session_state["use_edited"] = st.checkbox("編集したHTMLを採用する", value=True)
 
 # ------ 右：タイトル/説明 → 投稿 ------
+# ------ 右：タイトル/説明 → 投稿 ------
 with colR:
     st.header("3) タイトル/説明 → 投稿")
 
@@ -876,20 +949,35 @@ with colR:
                    (st.session_state.get("policy_text", "")))
     content_source = st.session_state.get("edited_html") or st.session_state.get("assembled_html", "")
 
-    colT1, colT2 = st.columns([1, 1])
-    with colT1:
-        if st.button("SEOタイトル自動生成"):
-            if not content_source.strip():
-                st.warning("先に本文（編集後）を用意してください。")
-            else:
-                st.session_state["title"] = generate_seo_title(keyword, content_dir)
-    with colT2:
-        if st.button("メタディスクリプション自動生成"):
-            t = st.session_state.get("title", "") or f"{keyword}に関するポイント"
-            if not content_source.strip():
-                st.warning("先に本文（編集後）を用意してください。")
-            else:
-                st.session_state["excerpt"] = generate_seo_description(keyword, content_dir, t)
+    # 統合生成ボタン
+    if st.button("📝 SEOタイトル・説明文を自動生成", use_container_width=True):
+        if not content_source.strip():
+            st.warning("先に本文（編集後）を用意してください。")
+        else:
+            with st.spinner("タイトルと説明文を生成中..."):
+                title, desc = generate_title_and_description_unified(keyword, content_dir)
+                st.session_state["title"] = title
+                st.session_state["excerpt"] = desc
+                st.success(f"生成完了！ タイトル: {len(title)}文字 / 説明文: {len(desc)}文字")
+
+    # 個別生成ボタン（バックアップ）
+    with st.expander("🔧 個別生成（統合版で上手くいかない場合）", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("タイトルのみ生成"):
+                if not content_source.strip():
+                    st.warning("先に本文を用意してください。")
+                else:
+                    st.session_state["title"] = generate_seo_title(keyword, content_dir)
+                    st.success("タイトルを生成しました。")
+        with col2:
+            if st.button("説明文のみ生成"):
+                if not content_source.strip():
+                    st.warning("先に本文を用意してください。")
+                else:
+                    t = st.session_state.get("title", "") or f"{keyword}について"
+                    st.session_state["excerpt"] = generate_seo_description(keyword, content_dir, t)
+                    st.success("説明文を生成しました。")
 
     title = st.text_input("タイトル", value=st.session_state.get("title", ""))
     slug = st.text_input("スラッグ（空ならキーワード/タイトルから自動）", value="")
@@ -979,3 +1067,4 @@ with colR:
         st.success(f"投稿成功！ID={data.get('id')} / status={data.get('status')}")
         st.write("URL:", data.get("link", ""))
         st.json({k: data.get(k) for k in ["id", "slug", "status", "date", "link"]})
+
