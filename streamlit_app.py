@@ -727,7 +727,7 @@ with colM:
     min_chars = st.number_input("本文の最小文字数",  min_value=500,  max_value=20000, value=2000, step=100)
     max_chars = st.number_input("本文の最大文字数",  min_value=800,  max_value=30000, value=5000, step=100)
     strict_chars = st.checkbox("厳密制御（不足/超過を自動調整）", value=True)
-    max_adjust_tries = st.number_input("自動調整の最大回数", 0, 3, 1, 1)
+    max_adjust_tries = st.number_input("自動調整の最大回数", 0, 3, 0, 1)  # デフォルト0
 
     # ①〜③ 生成
     if st.button("①〜③（読者像/ニーズ/構成）を生成"):
