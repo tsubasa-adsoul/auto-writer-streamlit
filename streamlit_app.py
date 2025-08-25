@@ -176,6 +176,50 @@ def trim_h2_max(structure_html: str, max_count: int) -> str:
             i += 1
     return "".join(out)
 
+def strip_existing_summary_h2(structure_html: str) -> str:
+    """構成③中に紛れた「まとめ」系H2をすべて除去（構成は本文用だけにする）"""
+    # 「まとめ」を含む<h2>～直後の<h3>群を丸ごと消す（次の<h2>直前まで）
+    out = []
+    i = 0
+    pattern_h2 = re.compile(r'(?is)<h2>(.*?)</h2>')
+    matches = list(pattern_h2.finditer(structure_html))
+    last_end = 0
+    for idx, m in enumerate(matches):
+        title = re.sub(r'<.*?>', '', m.group(1) or '').strip()
+        next_start = matches[idx + 1].start() if idx + 1 < len(matches) else len(structure_html)
+        block = structure_html[m.start():next_start]
+        if "まとめ" in title:
+            # スキップ（入れない）
+            pass
+        else:
+            # 直前のテキスト片を保持
+            if last_end < m.start():
+                out.append(structure_html[last_end:m.start()])
+            out.append(block)
+        last_end = next_start
+    if last_end < len(structure_html):
+        out.append(structure_html[last_end:])
+    return "".join(out).strip()
+
+def enforce_summary_last(structure_html: str, keyword: str, total_h2: int) -> str:
+    """
+    総H2数 total_h2 のうち最後の1つを必ず
+    <h2>{keyword}に関するまとめ</h2>
+    に固定する。③構成は本文用H2だけ（= total_h2-1 個）にそろえる。
+    """
+    # まず③構成内に紛れた「まとめ」H2は全部削除（本文用に純化）
+    structure_html = strip_existing_summary_h2(structure_html)
+
+    # 本文用の上限は total_h2 - 1
+    content_max = max(total_h2 - 1, 0)
+    if count_h2(structure_html) > content_max:
+        structure_html = trim_h2_max(structure_html, content_max)
+
+    # 最後に「まとめ」H2を強制付与
+    summary_h2 = f"\n<h2>{keyword}に関するまとめ</h2>\n"
+    return (structure_html.rstrip() + summary_h2)
+
+
 # ------------------------------
 # 本文文字数制御（必要なら再利用）
 # ------------------------------
@@ -717,6 +761,12 @@ with colM:
 
         if count_h2(structure_html) > max_h2:
             structure_html = trim_h2_max(structure_html, max_h2)
+      # --- ここから追加：最後のH2を必ず「まとめ」に固定する ---
+        # ユーザーの min/max は「総H2数（= まとめ含む）」として扱う。
+        # ③では本文用H2のみ(total_h2-1)を確定させ、最後の1枠をまとめに予約する。
+        target_total_h2 = max_h2  # 「6個で指定」等、上限＝総数として解釈
+        structure_html = enforce_summary_last(structure_html, keyword, target_total_h2)
+        # --- 追加ここまで ---
 
         st.session_state["structure_html"] = structure_html
 
