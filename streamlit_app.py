@@ -661,9 +661,30 @@ if st.sidebar.button("🔐 認証 /users/me"):
     st.sidebar.code(f"GET users/me → {r.status_code if r else 'N/A'}")
     st.sidebar.caption((r.text[:300] if r is not None else "No response"))
 
+# ここに追加：モデル選択UI
+st.sidebar.header("🤖 AIモデル選択")
+
+model_choice = st.sidebar.radio(
+    "使用するGeminiモデル",
+    options=["Pro", "Flash"],
+    index=0,
+    help="Pro: 高品質（26円/記事） | Flash: 高速・低コスト（1.6円/記事）"
+)
+
+# モデル名をセッションに保存
+if model_choice == "Pro":
+    st.session_state["selected_model"] = "gemini-1.5-pro"
+    st.sidebar.success("💎 Pro選択中\n約26円/記事（高品質）")
+else:
+    st.session_state["selected_model"] = "gemini-1.5-flash"  
+    st.sidebar.info("⚡ Flash選択中\n約1.6円/記事（94%削減）")
+
+st.sidebar.markdown("---")  # 区切り線
+
 # ------------------------------
 # セッション初期化（統合版）
 # ------------------------------
+
 if "policy_store" not in st.session_state or not isinstance(st.session_state.policy_store, dict):
     st.session_state.policy_store = {DEFAULT_PRESET_NAME: DEFAULT_POLICY_TXT}
 if "active_policy" not in st.session_state:
@@ -795,28 +816,6 @@ with colM:
     min_h2 = st.number_input("H2の最小数", min_value=1, max_value=12, value=3, step=1)
     if min_h2 > max_h2:
         st.warning("⚠️ H2の最小数が最大数を上回っています。最小≦最大 になるよう調整してください。")
-
-    # ここに明確にモデル選択UIを追加
-    st.divider()  # 区切り線を追加
-    st.subheader("🤖 AIモデル選択")
-    
-    model_choice = st.radio(
-        "使用するGeminiモデルを選択してください",
-        options=["gemini-1.5-pro (高品質)", "gemini-1.5-flash (高速・低コスト)"],
-        index=0,
-        format_func=lambda x: x.split(" ")[0] + (" - Pro" if "pro" in x else " - Flash"),
-        help="Pro: 高品質な文章生成（約26円/記事） | Flash: 高速・低コスト（約1.6円/記事・94%削減）"
-    )
-    
-    # モデル名をセッションに保存
-    if "pro" in model_choice.lower():
-        st.session_state["selected_model"] = "gemini-1.5-pro"
-        st.info("💎 **Gemini 1.5 Pro選択済み** - 推定コスト：約26円/記事（高品質・アフィリエイト推奨）")
-    else:
-        st.session_state["selected_model"] = "gemini-1.5-flash"
-        st.success("⚡ **Gemini 1.5 Flash選択済み** - 推定コスト：約1.6円/記事（94%コスト削減・量産向け）")
-    
-    st.divider()  # 区切り線を追加
 
     # 本文文字数
     min_chars = st.number_input("本文の最小文字数",  min_value=500,  max_value=20000, value=2000, step=100)
