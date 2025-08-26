@@ -812,8 +812,6 @@ with colM:
     else:
         st.session_state["selected_model"] = "gemini-1.5-flash"
         st.success("💰 推定コスト：約1.6円/記事（94%削減・量産向け）")
-    
-    min_h2 = st.number_input("H2の最小数", min_value=1, max_value=12, value=3, step=1)
 
 
     # 本文文字数
@@ -878,7 +876,6 @@ with colM:
 
         full = call_gemini(
             prompt_full_article_unified(
-            model=st.session_state.get("selected_model", "gemini-1.5-pro")
                 keyword=keyword,
                 unified_policy_text=st.session_state.policy_text,
                 structure_html=structure_html,
@@ -888,7 +885,8 @@ with colM:
                 co_terms=co_terms,
                 min_chars=min_chars,
                 max_chars=max_chars
-            )
+            ),
+            model=st.session_state.get("selected_model", "gemini-1.5-pro")
         )
         full = simplify_html(full)
         st.session_state["assembled_html"] = full
@@ -911,6 +909,7 @@ with colM:
                     if need <= 0: break
                     try:
                         add = call_gemini(prompt_append_chars(keyword, co_terms, html_cur, need)).strip()
+                                  model=st.session_state.get("selected_model", "gemini-1.5-pro")).strip()
                         add = simplify_html(add)
                         if not add or visible_length(add) < 100:
                             break
