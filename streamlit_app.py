@@ -798,7 +798,7 @@ with colM:
     # 本文文字数
     min_chars = st.number_input("本文の最小文字数",  min_value=500,  max_value=20000, value=2000, step=100)
     max_chars = st.number_input("本文の最大文字数",  min_value=800,  max_value=30000, value=5000, step=100)
-    strict_chars = st.checkbox("厳密制御（不足/超過を自動調整）", value=True)
+    strict_chars = st.checkbox("厳密制御（不足/超過を自動調整）", value=False)
     max_adjust_tries = st.number_input("自動調整の最大回数", 0, 3, 0, 1)  # デフォルト0
 
     # ①〜③ 生成
