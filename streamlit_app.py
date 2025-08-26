@@ -908,8 +908,8 @@ with colM:
                     need = min(min_chars - cur_len, max_chars - cur_len)
                     if need <= 0: break
                     try:
-                        add = call_gemini(prompt_append_chars(keyword, co_terms, html_cur, need)).strip()
-                                  model=st.session_state.get("selected_model", "gemini-1.5-pro")).strip()
+                        add = call_gemini(prompt_append_chars(keyword, co_terms, content, needed_chars), 
+                        model=st.session_state.get("selected_model", "gemini-1.5-pro")).strip()
                         add = simplify_html(add)
                         if not add or visible_length(add) < 100:
                             break
