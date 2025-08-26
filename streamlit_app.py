@@ -310,10 +310,10 @@ def prompt_append_chars(keyword: str, co_terms: List[str], current_html: str, ne
 # ------------------------------
 # Gemini 呼び出し
 # ------------------------------
-def call_gemini(prompt: str, temperature: float = 0.2) -> str:
+def call_gemini(prompt: str, temperature: float = 0.2, model: str = "gemini-1.5-pro") -> str:
     if not GEMINI_KEY:
         raise RuntimeError("Gemini APIキーが未設定です。Secrets に google.gemini_api_key_1 を追加してください。")
-    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={GEMINI_KEY}"
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_KEY}"
     payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": temperature}}
     r = requests.post(endpoint, json=payload, timeout=90)
     if r.status_code != 200:
@@ -341,7 +341,7 @@ def generate_seo_title(keyword: str, content_dir: str) -> str:
 
 # 出力: タイトルのみ
 """
-    result = call_gemini(p).strip()
+    result = call_gemini(p, model=st.session_state.get("selected_model", "gemini-1.5-pro")).strip()
     # クリーニング
     result = re.sub(r'[【】｜\n\r]', '', result)[:32]
     return result
@@ -795,6 +795,27 @@ with colM:
     if min_h2 > max_h2:
         st.warning("⚠️ H2の最小数が最大数を上回っています。最小≦最大 になるよう調整してください。")
 
+    # モデル選択
+    st.markdown("### 🤖 モデル選択")
+    model_choice = st.radio(
+        "生成モデル",
+        options=["Pro", "Flash"],
+        index=0,  # デフォルトはPro
+        horizontal=True,
+        help="Pro: 高品質（26.5円/記事） | Flash: 高速・低コスト（1.6円/記事）"
+    )
+    
+    # モデル名をセッションに保存
+    if model_choice == "Pro":
+        st.session_state["selected_model"] = "gemini-1.5-pro"
+        st.info("💰 推定コスト：約26.5円/記事（高品質・アフィリエイト推奨）")
+    else:
+        st.session_state["selected_model"] = "gemini-1.5-flash"
+        st.success("💰 推定コスト：約1.6円/記事（94%削減・量産向け）")
+    
+    min_h2 = st.number_input("H2の最小数", min_value=1, max_value=12, value=3, step=1)
+
+
     # 本文文字数
     min_chars = st.number_input("本文の最小文字数",  min_value=500,  max_value=20000, value=2000, step=100)
     max_chars = st.number_input("本文の最大文字数",  min_value=800,  max_value=30000, value=5000, step=100)
@@ -807,7 +828,8 @@ with colM:
             st.error("キーワードは必須です。")
             st.stop()
         outline_raw = call_gemini(
-            prompt_outline_123(keyword, extra_points, merged_banned, co_terms, min_h2, max_h2)
+            prompt_outline_123(keyword, extra_points, merged_banned, co_terms, min_h2, max_h2),
+            model=st.session_state.get("selected_model", "gemini-1.5-pro")
         )
 
         readers = re.search(r'①[^\n]*\n(.+?)\n\n②', outline_raw, flags=re.DOTALL)
@@ -825,7 +847,8 @@ with colM:
         current_h2 = count_h2(structure_html)
         if current_h2 < min_h2:
             need = min_h2 - current_h2
-            add = call_gemini(prompt_fill_h2(keyword, structure_html, need)).strip()
+            add = call_gemini(prompt_fill_h2(keyword, structure_html, need), 
+                  model=st.session_state.get("selected_model", "gemini-1.5-pro")).strip()
             add = simplify_html(add)
             if count_h2(add) > 0:
                 structure_html = (structure_html.rstrip() + "\n\n" + add.strip())
@@ -855,6 +878,7 @@ with colM:
 
         full = call_gemini(
             prompt_full_article_unified(
+            model=st.session_state.get("selected_model", "gemini-1.5-pro")
                 keyword=keyword,
                 unified_policy_text=st.session_state.policy_text,
                 structure_html=structure_html,
